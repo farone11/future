@@ -1,32 +1,26 @@
-import { useState } from 'react';
-import Sidebar from './components/Sidebar';
-import Dashboard from './pages/Dashboard';
-import InstitutionalFlow from './pages/InstitutionalFlow';
-import LiquidityZones from './pages/LiquidityZones';
-import RiskEngine from './pages/RiskEngine';
-import AISignals from './pages/AISignals';
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import Sidebar from './components/Sidebar'
+import Dashboard from './pages/Dashboard' // page utama kamu sekarang
+import Signals from './pages/Signals' // bikin baru
+import History from './pages/History' // bikin baru
+import Settings from './pages/Settings' // bikin baru
 
-type Page = 'dashboard' | 'institutional-flow' | 'liquidity-zones' | 'risk-engine' | 'ai-signals';
-
-export default function App() {
-  const [activePage, setActivePage] = useState<Page>('dashboard');
-
-  const renderPage = () => {
-    switch (activePage) {
-      case 'dashboard': return <Dashboard />;
-      case 'institutional-flow': return <InstitutionalFlow />;
-      case 'liquidity-zones': return <LiquidityZones />;
-      case 'risk-engine': return <RiskEngine />;
-      case 'ai-signals': return <AISignals />;
-    }
-  };
-
+function App() {
   return (
-    <div className="flex min-h-screen bg-[#0a0a0c]">
-      <Sidebar activePage={activePage} onNavigate={setActivePage} />
-      <main className="flex-1 overflow-y-auto">
-        {renderPage()}
-      </main>
-    </div>
-  );
+    <BrowserRouter>
+      <div className="flex">
+        <Sidebar />
+        <div className="flex-1">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/signals" element={<Signals />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </div>
+      </div>
+    </BrowserRouter>
+  )
 }
+
+export default App
