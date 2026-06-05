@@ -1,0 +1,16 @@
+{
+  "risk_per_trade": 1.0,
+  "max_daily_dd": 3.0,
+  "max_lot": 0.05,
+  "kill_switch": true,
+  "trading_hours": {
+    "start": "07:00",
+    "end": "23:00"
+  },
+  "ai_modules": {
+    "smc": true,
+    "prz": true,
+    "liquidity": true,
+    "risk_ai": true
+  }
+}
