@@ -21,7 +21,7 @@ SYMBOL = "XAU/USD"
 DISPLAY_SYMBOL = "XAUUSD"
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
-TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY", "demo")
+TWELVEDATA_API_KEY = os.getenv("5d5a898e340a4662a24bd25880a81586", "demo")
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0, "max_daily_dd": 3.0, "max_lot": 0.10, "kill_switch": True,
