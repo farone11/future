@@ -4,7 +4,7 @@ import Card from '../components/Card';
 import toast from 'react-hot-toast';
 import { Save, Shield, AlertTriangle } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5400';
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online';
 
 interface Settings {
   risk_per_trade: number;
