@@ -1,14 +1,15 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
 import json
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 import asyncio
 from contextlib import asynccontextmanager
 import httpx
 import os
+import time as time_module
 
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
 def log_error(msg): print(f"[ERROR] {datetime.utcnow()} {msg}")
@@ -21,7 +22,7 @@ DISPLAY_SYMBOL = "XAUUSD"
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
 CACHE_FILE = Path("price_cache.json")
-TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "") # AMBIL DARI RAILWAY ENV
+TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "")
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0, "max_daily_dd": 3.0, "max_lot": 0.10, "kill_switch": True,
@@ -30,7 +31,7 @@ DEFAULT_SETTINGS = {
 }
 
 CACHE = {"data": None, "timestamp": 0, "last_good": None}
-SIGNALS_CACHE: Dict[str, any] = {"signals": [], "clients": set()}
+SIGNALS_CACHE: Dict[str, any] = {"signals": []}
 MT5_LIVE_DATA = {
     "price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "",
     "balance": 10000, "equity": 10000, "margin": 0, "free_margin": 10000,
@@ -52,9 +53,8 @@ class SettingsModel(BaseModel):
             time.fromisoformat(v['start']); time.fromisoformat(v['end']); return v
         except: raise ValueError('Invalid time format. Use HH:MM')
 
-# FIX 1: TAMBAHIN tp YANG HILANG
 class NewSignalModel(BaseModel):
-    type: str; entry: float; sl: float; tp: float # WAJIB ADA
+    type: str; entry: float; sl: float; tp: float
     tp2: Optional[float] = None; tp3: Optional[float] = None
     source: str = "MANUAL"; confidence: int = 85
 
@@ -130,20 +130,12 @@ def get_active_signal() -> dict:
         if s["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]: return s
     return {"status": "NONE", "entry": 0, "sl": 0, "tp1": 0, "confidence": 0, "source": "NONE"}
 
-async def broadcast_signal(signal: dict):
-    dead_clients: Set[WebSocket] = set()
-    payload = {"type": "signal_update", "data": signal}
-    for client in SIGNALS_CACHE["clients"].copy():
-        try: await client.send_json(payload)
-        except Exception: dead_clients.add(client)
-    SIGNALS_CACHE["clients"] -= dead_clients; save_signals()
-
 async def signal_monitor():
     while True:
         try:
             mt5_data = get_mt5_data_cached()
             if "error" in mt5_data: await asyncio.sleep(1); continue
-            bid, ask = mt5_data["price"], mt5_data["ask"]; updated_signals = []
+            bid, ask = mt5_data["price"], mt5_data["ask"]; updated = False
             for signal in SIGNALS_CACHE["signals"]:
                 old_status = signal["status"]; new_status = old_status
                 if signal["status"] == "WAITING":
@@ -164,27 +156,25 @@ async def signal_monitor():
                 if new_status!= old_status:
                     signal["status"] = new_status
                     if new_status == "CLOSED": signal["closed_at"] = get_jakarta_time().isoformat()
-                    updated_signals.append(signal)
-            if updated_signals: save_signals()
-            for s in updated_signals: await broadcast_signal(s)
+                    updated = True
+            if updated: save_signals()
         except Exception as e: log_error(f"Monitor error: {e}")
         await asyncio.sleep(1)
 
-# UPGRADE 2: PAKE TWELVEDATA SEBAGAI PRIORITAS UTAMA
+# FIX BUG COROUTINE: await session.get() bukan async with
 async def price_fetcher():
     global MT5_LIVE_DATA, LAST_MT5_UPDATE
     log_info("Price fetcher started - TwelveData Primary")
     async with httpx.AsyncClient() as session:
         while True:
             try:
-                # 1. Skip kalo MT5 baru update < 30 detik
                 if datetime.now().timestamp() - LAST_MT5_UPDATE < 30:
                     await asyncio.sleep(5); continue
 
-                # 2. TWELVEDATA - 800/day, 8/min
                 if TD_API_KEY:
                     url_price = f"https://api.twelvedata.com/price?symbol=XAU/USD&apikey={TD_API_KEY}"
                     url_quote = f"https://api.twelvedata.com/quote?symbol=XAU/USD&apikey={TD_API_KEY}"
+                    # FIX: pake await langsung, bukan async with
                     p_res = await session.get(url_price, timeout=5)
                     q_res = await session.get(url_quote, timeout=5)
                     if p_res.status_code == 200 and q_res.status_code == 200:
@@ -200,22 +190,22 @@ async def price_fetcher():
                         MT5_LIVE_DATA["source"] = "TWELVEDATA"
                         save_price_cache(MT5_LIVE_DATA["price"], MT5_LIVE_DATA["ask"], change)
                         log_info(f"TwelveData: {price} {change:+.2f}")
-                        await asyncio.sleep(8); continue # 8 calls/min limit
+                        await asyncio.sleep(8); continue
 
-                # 3. Fallback FCSAPI
+                # Fallback FCSAPI
                 url = "https://fcsapi.com/api-v3/forex/latest?symbol=XAU/USD&access_key=free"
-                async with session.get(url, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("status") and data["response"]:
-                            price = float(data["response"][0]["c"])
-                            MT5_LIVE_DATA["bid"] = round(price, 2)
-                            MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
-                            MT5_LIVE_DATA["price"] = round(price, 2)
-                            MT5_LIVE_DATA["source"] = "FCSAPI"
-                            save_price_cache(price, price + 0.15, 0)
-                            log_info(f"FCSAPI: {price}")
-                            await asyncio.sleep(60); continue
+                resp = await session.get(url, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("status") and data["response"]:
+                        price = float(data["response"][0]["c"])
+                        MT5_LIVE_DATA["bid"] = round(price, 2)
+                        MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
+                        MT5_LIVE_DATA["price"] = round(price, 2)
+                        MT5_LIVE_DATA["source"] = "FCSAPI"
+                        save_price_cache(price, price + 0.15, 0)
+                        log_info(f"FCSAPI: {price}")
+                        await asyncio.sleep(60); continue
 
                 log_warn("All APIs failed, using cache")
             except Exception as e: log_error(f"Fetcher error: {e}")
@@ -229,7 +219,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(signal_monitor()); asyncio.create_task(price_fetcher())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="12.1 TwelveData", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="12.2 Fixed", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/health")
@@ -238,8 +228,10 @@ def health(): return {"status": "ok", "data_source": MT5_LIVE_DATA["source"], "t
 @app.post("/api/mt5-tick")
 async def receive_mt5_tick(data: MT5TickModel):
     global MT5_LIVE_DATA, LAST_MT5_UPDATE
-    MT5_LIVE_DATA = data.model_dump(); MT5_LIVE_DATA["price"] = data.bid
-    MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S"); MT5_LIVE_DATA["source"] = "MT5"
+    MT5_LIVE_DATA = data.model_dump()
+    MT5_LIVE_DATA["price"] = data.bid
+    MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S")
+    MT5_LIVE_DATA["source"] = "MT5"
     LAST_MT5_UPDATE = datetime.now().timestamp()
     save_price_cache(data.bid, data.ask, 0)
     return {"status": "ok"}
@@ -261,30 +253,9 @@ def dashboard():
         }, "updated_at": mt5_data["time"], "updated_date": mt5_data["date"], "symbol": DISPLAY_SYMBOL
     }
 
-@app.websocket("/ws/live")
-async def websocket_dashboard(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True: data = dashboard(); await websocket.send_json(data); await asyncio.sleep(1)
-    except WebSocketDisconnect: pass
-
-@app.websocket("/ws/signals")
-async def websocket_signals(websocket: WebSocket):
-    await websocket.accept(); SIGNALS_CACHE["clients"].add(websocket)
-    try:
-        await websocket.send_json({"type": "init", "signals": SIGNALS_CACHE["signals"]})
-        while True:
-            try:
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                if data == "ping": await websocket.send_json({"type": "pong"})
-            except asyncio.TimeoutError: await websocket.send_json({"type": "heartbeat", "time": get_jakarta_time().strftime("%H:%M:%S")})
-    except WebSocketDisconnect: pass
-    finally: SIGNALS_CACHE["clients"].discard(websocket)
-
 @app.get("/api/signals")
 def get_signals(): return {"signals": SIGNALS_CACHE["signals"]}
 
-# FIX 3: BENERIN create_signal PAKE tp
 @app.post("/api/signals")
 async def create_signal(signal: NewSignalModel):
     rr = round(abs(signal.tp - signal.entry) / abs(signal.entry - signal.sl), 1) if signal.entry!= signal.sl else 0
@@ -297,12 +268,8 @@ async def create_signal(signal: NewSignalModel):
         "confidence": signal.confidence, "source": signal.source, "rr": rr, "pnl": None,
         "current_price": current_price, "close_reason": None, "closed_at": None, "triggered_at": None
     }
-    SIGNALS_CACHE["signals"].insert(0, new_signal); await broadcast_signal(new_signal)
+    SIGNALS_CACHE["signals"].insert(0, new_signal); save_signals()
     return {"status": "success", "signal": new_signal}
-
-@app.get("/api/analytics")
-def get_analytics(days: int = 30):
-    return {"equity_curve": [], "win_rate": 0, "profit_factor": 0, "max_dd": 0, "sharpe": 0, "total_trades": 0}
 
 @app.get("/api/settings")
 def get_settings(): return load_settings()
