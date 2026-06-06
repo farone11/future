@@ -3,11 +3,16 @@ import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
-import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff } from 'lucide-react'
+import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff, AlertTriangle } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5400'
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:5400/ws/live'
-const WS_SIGNALS_URL = import.meta.env.VITE_WS_SIGNALS_URL || 'ws://127.0.0.1:5400/ws/signals'
+// Gak pake fallback localhost biar ketahuan kalo env gagal
+const API_URL = import.meta.env.VITE_API_URL
+const WS_URL = import.meta.env.VITE_WS_URL
+const WS_SIGNALS_URL = import.meta.env.VITE_WS_SIGNALS_URL || WS_URL?.replace('/ws/live', '/ws/signals')
+
+if (!API_URL ||!WS_URL) {
+  console.error('ENV GAGAL: VITE_API_URL atau VITE_WS_URL tidak ke-set di Cloudflare Pages')
+}
 
 interface DashboardData {
   ai_status: string
@@ -20,7 +25,7 @@ interface DashboardData {
   total_trades: number
   active_signal: {
     id?: number
-    status: 'BUY' | 'SELL' | 'NONE'
+    status: 'BUY' | 'SELL' | 'NONE' | 'WAITING' | 'ACTIVE' | 'TRIGGERED' | 'CLOSED'
     entry: number
     sl: number
     tp1: number
@@ -47,6 +52,8 @@ interface DashboardData {
   open_positions?: number
   updated_at: string
   updated_date?: string
+  data_source?: string
+  error?: string
 }
 
 interface AnalyticsData {
@@ -125,6 +132,12 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (!API_URL) {
+      setError('VITE_API_URL tidak ke-set. Cek Cloudflare Pages Environment Variables')
+      setLoading(false)
+      return
+    }
+
     abortControllerRef.current = new AbortController()
     const fetchAll = async () => {
       try {
@@ -136,12 +149,16 @@ export default function Dashboard() {
 
         if (settingsRes.ok) setSettings(await settingsRes.json())
         if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
-        if (dashboardRes.ok) setData(await dashboardRes.json())
+        if (dashboardRes.ok) {
+          const dashData = await dashboardRes.json()
+          setData(dashData)
+          if (dashData.error) setError(dashData.error)
+        }
 
       } catch (err: any) {
         if (err.name!== 'AbortError') {
           console.error('Fetch error:', err)
-          setError('Backend unreachable')
+          setError(`Backend unreachable: ${API_URL}`)
         }
       } finally {
         setLoading(false)
@@ -152,6 +169,7 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (!WS_URL) return
     let reconnectTimeout: NodeJS.Timeout | null = null
     let reconnectAttempts = 0
     let isMounted = true
@@ -205,16 +223,13 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (!WS_SIGNALS_URL) return
     let reconnectTimeout: NodeJS.Timeout | null = null
     let isMounted = true
 
     const connectSignalsWS = () => {
       if (!isMounted) return
       wsSignals.current = new WebSocket(WS_SIGNALS_URL)
-
-      wsSignals.current.onopen = () => {
-        console.log('Signals WS connected')
-      }
 
       wsSignals.current.onmessage = (event) => {
         if (!isMounted) return
@@ -230,13 +245,7 @@ export default function Dashboard() {
                 } else if (updatedSignal.status.includes('HIT')) {
                   toast.success(`✅ ${updatedSignal.status}: PnL $${updatedSignal.pnl?.toFixed(2)}`)
                 }
-                return {
-                 ...prev,
-                  active_signal: {
-                   ...prev.active_signal,
-                   ...updatedSignal
-                  }
-                }
+                return {...prev, active_signal: {...prev.active_signal,...updatedSignal } }
               }
               return prev
             })
@@ -277,10 +286,26 @@ export default function Dashboard() {
   const hasActiveSignal = activeSignal && activeSignal.status!== 'NONE' && activeSignal.entry > 0
   const spread = data?.spread || (data?.ask_price && data?.gold_price? data.ask_price - data.gold_price : 0)
 
+  if (!API_URL) {
+    return (
+      <PageLayout title="ERROR" subtitle="Configuration Missing">
+        <Card className="border-red-500/50">
+          <div className="flex items-center gap-2 text-red-400">
+            <AlertTriangle size={20} />
+            <div>
+              <div className="font-bold">VITE_API_URL tidak ke-set</div>
+              <div className="text-sm text-gray-400 mt-1">Buka Cloudflare Pages → Settings → Environment Variables → Add Production: VITE_API_URL = https://api.faronecapital.online</div>
+            </div>
+          </div>
+        </Card>
+      </PageLayout>
+    )
+  }
+
   return (
     <PageLayout
       title="FUTURISTIC GOLD TRADING ANALYTICS"
-      subtitle="Institutional Intelligence Layer · XAUUSD Analytics · Professional Environment"
+      subtitle={`Institutional Intelligence Layer · XAUUSD Analytics · ${data?.data_source || 'Loading'}`}
       badge={
         <div className="flex items-center gap-2">
           {wsConnected? <Wifi size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
@@ -502,6 +527,7 @@ export default function Dashboard() {
             <div>Total P/L: <span className="text-yellow-400">${analytics?.total_pl?.toFixed(2) || '0.00'}</span></div>
             <div>Last Update: {data?.updated_at || timeStr}</div>
             <div>Server: {dateStr}</div>
+            <div>Source: <span className="text-cyan-400">{data?.data_source || 'NONE'}</span></div>
           </div>
         </Card>
       </div>
