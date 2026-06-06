@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
 import json
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, List
 import asyncio
 from contextlib import asynccontextmanager
 import aiohttp
@@ -29,8 +29,9 @@ DEFAULT_SETTINGS = {
     "ai_modules": {"smc": True, "prz": True, "liquidity": True, "risk_ai": True}
 }
 
-CACHE = {"data": None, "timestamp": 0, "last_good": None}
+CACHE = {"data": None, "timestamp": 0, "last_good": None, "history": []}
 SIGNALS_CACHE: Dict[str, any] = {"signals": [], "clients": set()}
+PRICE_CLIENTS: Set[WebSocket] = set() # FIX: Buat broadcast harga ke sidebar
 MT5_LIVE_DATA = {"price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "", "balance": 10000, "equity": 10000, "margin": 0, "free_margin": 10000, "source": "NONE"}
 
 class SettingsModel(BaseModel):
@@ -113,6 +114,24 @@ async def broadcast_signal(signal: dict):
         except Exception: dead_clients.add(client)
     SIGNALS_CACHE["clients"] -= dead_clients; save_signals()
 
+async def broadcast_price():
+    # FIX: Kirim harga ke semua client Dashboard biar sidebar nyala
+    if not PRICE_CLIENTS: return
+    mt5_data = get_mt5_data_cached()
+    if "error" in mt5_data: return
+    
+    payload = {
+        "type": "price_update",
+        "price": mt5_data["price"],
+        "ask": mt5_data["ask"],
+        "time": mt5_data["time"]
+    }
+    dead_clients: Set[WebSocket] = set()
+    for client in PRICE_CLIENTS.copy():
+        try: await client.send_json(payload)
+        except Exception: dead_clients.add(client)
+    PRICE_CLIENTS -= dead_clients
+
 async def signal_monitor():
     log_info("Signal monitor started")
     while True:
@@ -137,7 +156,7 @@ async def signal_monitor():
                         elif ask <= signal["tp1"]: new_status = "CLOSED"
                         elif ask >= signal["sl"]: new_status = "CLOSED"
                 signal["current_price"] = bid if signal["type"] == "BUY" else ask
-                if new_status!= old_status:
+                if new_status != old_status:
                     signal["status"] = new_status
                     if new_status == "CLOSED": signal["closed_at"] = get_jakarta_time().isoformat()
                     updated_signals.append(signal)
@@ -167,6 +186,7 @@ async def twelvedata_fetcher():
                             MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S")
                             MT5_LIVE_DATA["source"] = "TWELVEDATA"
                             log_info(f"TwelveData: {price}")
+                            await broadcast_price() # FIX: Kirim ke sidebar
                         else:
                             log_warn(f"TwelveData returned 0. Market closed?")
                     elif resp.status == 429:
@@ -192,7 +212,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(signal_monitor()); asyncio.create_task(twelvedata_fetcher())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="11.0 TwelveData", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="11.1 WS+History", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -226,10 +246,12 @@ def dashboard():
 @app.websocket("/ws/live")
 async def websocket_dashboard(websocket: WebSocket):
     await websocket.accept()
+    PRICE_CLIENTS.add(websocket) # FIX: Register buat dapet update harga
     try:
         while True:
             data = dashboard(); await websocket.send_json(data); await asyncio.sleep(1)
     except WebSocketDisconnect: pass
+    finally: PRICE_CLIENTS.discard(websocket)
 
 @app.websocket("/ws/signals")
 async def websocket_signals(websocket: WebSocket):
@@ -249,7 +271,7 @@ def get_signals(): return {"signals": SIGNALS_CACHE["signals"]}
 
 @app.post("/api/signals")
 async def create_signal(signal: NewSignalModel):
-    rr = round(abs(signal.tp - signal.entry) / abs(signal.entry - signal.sl), 1) if signal.entry!= signal.sl else 0
+    rr = round(abs(signal.tp - signal.entry) / abs(signal.entry - signal.sl), 1) if signal.entry != signal.sl else 0
     mt5_data = get_mt5_data_cached(); current_price = mt5_data.get("price", signal.entry)
     new_signal = {
         "id": int(datetime.now().timestamp() * 1000), "pair": "XAUUSD", "type": signal.type.upper(), 
@@ -265,6 +287,20 @@ async def create_signal(signal: NewSignalModel):
 @app.get("/api/analytics")
 def get_analytics(days: int = 30):
     return {"equity_curve": [], "win_rate": 0, "profit_factor": 0, "max_dd": 0, "sharpe": 0, "total_trades": 0}
+
+# FIX: Tambah endpoint /api/history biar gak 404
+@app.get("/api/history")
+async def get_history(days: int = 30):
+    # Sementara return kosong, nanti isi TwelveData time_series
+    closed_trades = [s for s in SIGNALS_CACHE["signals"] if s["status"] == "CLOSED"]
+    return {
+        "status": "ok",
+        "symbol": DISPLAY_SYMBOL,
+        "days": days,
+        "trades": closed_trades,
+        "equity_curve": CACHE["history"][-days:],
+        "message": "Historical data coming soon"
+    }
 
 @app.get("/api/settings")
 def get_settings(): return load_settings()
