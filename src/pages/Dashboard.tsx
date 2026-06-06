@@ -3,10 +3,9 @@ import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
-import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff, AlertTriangle } from 'lucide-react'
-import { useSignalWS } from '@/hooks/useSignalWS' // <-- PAKE HOOK BENER
+import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff, AlertTriangle, CheckCircle } from 'lucide-react'
+import { useSignalWS } from '@/hooks/useSignalWS'
 
-// CUMA BUTUH API_URL, BUANG WS_URL
 const API_URL = import.meta.env.VITE_API_URL
 
 if (!API_URL) {
@@ -77,15 +76,14 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // PAKE HOOK INI DOANG. UDAH GAK ADA WEBSOCKET.
-  const { liveData: data, connected: wsConnected, signals } = useSignalWS()
+  // PAKE HOOK INI. `connected` = status HTTP polling, BUKAN WS
+  const { liveData: data, connected } = useSignalWS()
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
-  // FETCH SETTINGS & ANALYTICS AJA. DATA UTAMA DARI useSignalWS
   useEffect(() => {
     if (!API_URL) {
       setLoading(false)
@@ -111,7 +109,6 @@ export default function Dashboard() {
     fetchAll()
   }, [])
 
-  // KILL SWITCH TOAST
   useEffect(() => {
     if (data?.risk_engine?.kill_switch) {
       toast.error('🚨 KILL SWITCH TRIGGERED', { duration: 10000 })
@@ -134,6 +131,7 @@ export default function Dashboard() {
   const activeSignal = data?.active_signal
   const hasActiveSignal = activeSignal && activeSignal.status!== 'NONE' && activeSignal.entry > 0
   const spread = data?.spread || (data?.ask_price && data?.gold_price? data.ask_price - data.gold_price : 0)
+  const hasData = data && data.gold_price > 0
 
   if (!API_URL) {
     return (
@@ -157,11 +155,11 @@ export default function Dashboard() {
       subtitle={`Institutional Intelligence Layer · XAUUSD Analytics · ${data?.data_source || 'Loading'}`}
       badge={
         <div className="flex items-center gap-2">
-          {wsConnected? <Wifi size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
-          {wsConnected? 'LIVE' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
+          {connected? <CheckCircle size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
+          {connected? 'LIVE' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
         </div>
       }
-      badgeColor={!wsConnected? 'text-red-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
+      badgeColor={!connected? 'text-red-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
     >
       {killSwitchActive && (
         <div className="mb-4 px-3 py-2 border border-red-500/50 bg-red-500/10 rounded text-red-200 text-sm animate-pulse">
@@ -169,7 +167,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {!wsConnected && (
+      {!connected && (
         <div className="mb-4 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded text-red-200/70 text-xs">
           <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check Railway logs.
         </div>
@@ -180,7 +178,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-4">
-        {loading? Array(8).fill(0).map((_, i) => <SkeletonCard key={i} />) : (
+        {loading ||!hasData? Array(8).fill(0).map((_, i) => <SkeletonCard key={i} />) : (
           <>
             <Card className="col-span-1">
               <div className="text-gray-400 text-xs uppercase tracking-widest mb-1">XAUUSD PRICE</div>
@@ -345,6 +343,7 @@ export default function Dashboard() {
               Recovery: <span className="text-green-400">{analytics?.recovery_factor?.toFixed(2) || '0.00'}</span> |
               Sortino: <span className="text-blue-400">{analytics?.sortino_ratio?.toFixed(2) || '0.00'}</span>
             </div>
+          </div>
           <EquityChart data={analytics?.equity_curve || []} />
           <div className="w-full mt-3" style={{ height: 280 }}>
             <iframe
