@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export interface Signal {
   id: number
@@ -20,169 +20,62 @@ export const useSignalWS = () => {
   const [signals, setSignals] = useState<Signal[]>([])
   const [connected, setConnected] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<string>('-')
-
-  const ws = useRef<WebSocket | null>(null)
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const retryCount = useRef(0)
   const isMounted = useRef(true)
-
-  const connectWS = useCallback(() => {
-    if (!isMounted.current) return
-
-    if (reconnectTimer.current) {
-      clearTimeout(reconnectTimer.current)
-      reconnectTimer.current = null
-    }
-
-    if (heartbeatTimer.current) {
-      clearInterval(heartbeatTimer.current)
-      heartbeatTimer.current = null
-    }
-
-    if (
-      ws.current &&
-      (
-        ws.current.readyState === WebSocket.OPEN ||
-        ws.current.readyState === WebSocket.CONNECTING
-      )
-    ) {
-      return
-    }
-
-    const LIVE_WS = import.meta.env.VITE_WS_URL
-    const SIGNAL_WS =
-      import.meta.env.VITE_WS_SIGNALS_URL ||
-      LIVE_WS?.replace('/ws/live', '/ws/signals') ||
-      'wss://api.faronecapital.online/ws/signals'
-
-    console.log('[SignalWS] Connecting:', SIGNAL_WS)
-
-    try {
-      ws.current = new WebSocket(SIGNAL_WS)
-
-      ws.current.onopen = () => {
-        if (!isMounted.current) return
-
-        console.log('[SignalWS] Connected')
-
-        setConnected(true)
-        retryCount.current = 0
-        setLastUpdate(new Date().toLocaleTimeString())
-
-        heartbeatTimer.current = setInterval(() => {
-          if (ws.current?.readyState === WebSocket.OPEN) {
-            ws.current.send(
-              JSON.stringify({
-                type: 'ping'
-              })
-            )
-          }
-        }, 25000)
-      }
-
-      ws.current.onmessage = (event) => {
-        if (!isMounted.current) return
-
-        try {
-          const msg = JSON.parse(event.data)
-
-          if (msg.type === 'init') {
-            setSignals(msg.signals || [])
-          }
-          else if (msg.type === 'signal_update') {
-            setSignals(prev => {
-              const index = prev.findIndex(s => s.id === msg.data.id)
-
-              if (index >= 0) {
-                const updated = [...prev]
-                updated[index] = {
-                  ...updated[index],
-                  ...msg.data
-                }
-                return updated
-              }
-
-              return [msg.data, ...prev]
-            })
-          }
-          else if (
-            msg.type === 'heartbeat' ||
-            msg.type === 'pong'
-          ) {
-            // ignore
-          }
-          else if (Array.isArray(msg)) {
-            setSignals(msg)
-          }
-
-          setLastUpdate(new Date().toLocaleTimeString())
-
-        } catch (err) {
-          console.error('[SignalWS] Parse Error:', err)
-        }
-      }
-
-      ws.current.onerror = (err) => {
-        console.error('[SignalWS] Error:', err)
-        setConnected(false)
-      }
-
-      ws.current.onclose = (event) => {
-        if (!isMounted.current) return
-
-        console.log(
-          `[SignalWS] Closed ${event.code}`
-        )
-
-        setConnected(false)
-
-        retryCount.current += 1
-
-        const delay = Math.min(
-          1000 * Math.pow(2, retryCount.current),
-          10000
-        )
-
-        reconnectTimer.current = setTimeout(() => {
-          connectWS()
-        }, delay)
-      }
-
-    } catch (err) {
-      console.error('[SignalWS] Create WS failed:', err)
-    }
-
-  }, [])
 
   useEffect(() => {
     isMounted.current = true
 
-    connectWS()
+    const fetchSignals = async () => {
+      try {
+        const res = await fetch('/api/live')
+        
+        if (!res.ok) throw new Error('Failed to fetch')
+        
+        const data = await res.json()
+        
+        if (!isMounted.current) return
 
-    return () => {
-      isMounted.current = false
+        // Kalo backend lu return {status: 'offline'}
+        if (data.status === 'offline') {
+          setConnected(false)
+          return
+        }
 
-      if (reconnectTimer.current) {
-        clearTimeout(reconnectTimer.current)
-      }
+        // Mapping dari data KV ke format Signal
+        const signalData: Signal = {
+          id: data.timestamp || Date.now(),
+          type: data.bias || 'BUY', // ganti sesuai field lu
+          entry: data.price || data.goldPrice,
+          sl: data.sl,
+          tp: data.tp || data.tp1,
+          tp1: data.tp1,
+          tp2: data.tp2,
+          status: data.status || 'LIVE',
+          time: new Date().toLocaleTimeString(),
+          source: data.symbol || 'XAUUSD',
+          confidence: data.confidence || 0,
+          pnl: data.profit || 0
+        }
 
-      if (heartbeatTimer.current) {
-        clearInterval(heartbeatTimer.current)
-      }
+        // Kalo mau array, push ke signals
+        setSignals([signalData]) 
+        setConnected(true)
+        setLastUpdate(new Date().toLocaleTimeString())
 
-      if (ws.current) {
-        ws.current.onopen = null
-        ws.current.onmessage = null
-        ws.current.onerror = null
-        ws.current.onclose = null
-
-        ws.current.close()
-        ws.current = null
+      } catch (err) {
+        console.error('[LiveData] Fetch Error:', err)
+        if (isMounted.current) setConnected(false)
       }
     }
 
-  }, [connectWS])
+    fetchSignals() // load pertama
+    const interval = setInterval(fetchSignals, 2000) // update tiap 2 detik
+
+    return () => {
+      isMounted.current = false
+      clearInterval(interval)
+    }
+  }, [])
 
   return {
     signals,
