@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
@@ -6,20 +6,14 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Set
 import asyncio
-import traceback
 from contextlib import asynccontextmanager
-import os
 
-# Ganti loguru pake print biar gak nambah dependency
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
 def log_error(msg): print(f"[ERROR] {datetime.utcnow()} {msg}")
 def log_warn(msg): print(f"[WARN] {datetime.utcnow()} {msg}")
 
-# MT5 dimatikan total buat Railway Linux
-MT5_AVAILABLE = False
-
 def get_jakarta_time():
-    return datetime.utcnow() + timedelta(hours=7) # GMT+7
+    return datetime.utcnow() + timedelta(hours=7)
 
 SYMBOL = "XAUUSDc"
 DISPLAY_SYMBOL = "XAUUSD"
@@ -119,16 +113,13 @@ def get_mt5_data_cached():
     
     jakarta_time = get_jakarta_time()
     data = {
-        "price": MT5_LIVE_DATA["bid"], 
-        "ask": MT5_LIVE_DATA["ask"], 
+        "price": MT5_LIVE_DATA["bid"], "ask": MT5_LIVE_DATA["ask"], 
         "spread": round(MT5_LIVE_DATA["ask"] - MT5_LIVE_DATA["bid"], 2),
         "daily_change": 0, "daily_change_pct": 0,
         "time": jakarta_time.strftime("%H:%M:%S"), 
         "date": jakarta_time.strftime("%Y-%m-%d"),
-        "balance": MT5_LIVE_DATA["balance"], 
-        "equity": MT5_LIVE_DATA["equity"],
-        "margin": MT5_LIVE_DATA["margin"], 
-        "free_margin": MT5_LIVE_DATA["free_margin"],
+        "balance": MT5_LIVE_DATA["balance"], "equity": MT5_LIVE_DATA["equity"],
+        "margin": MT5_LIVE_DATA["margin"], "free_margin": MT5_LIVE_DATA["free_margin"],
     }
     CACHE["data"] = data
     CACHE["last_good"] = data
@@ -197,14 +188,14 @@ async def signal_monitor():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path("logs").mkdir(exist_ok=True)
-    log_warn("Running without MT5. Waiting for external data via /api/mt5-tick")
+    log_warn("Running in API-only mode. Waiting for /api/mt5-tick")
     load_settings()
     load_signals_to_cache()
     asyncio.create_task(signal_monitor())
     yield
     log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="9.1 Railway", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="9.2 Railway", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
