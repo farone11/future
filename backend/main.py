@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 import asyncio
 from contextlib import asynccontextmanager
+import aiohttp
+import os
 
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
 def log_error(msg): print(f"[ERROR] {datetime.utcnow()} {msg}")
@@ -15,10 +17,11 @@ def log_warn(msg): print(f"[WARN] {datetime.utcnow()} {msg}")
 def get_jakarta_time():
     return datetime.utcnow() + timedelta(hours=7)
 
-SYMBOL = "XAUUSDc"
+SYMBOL = "OANDA:XAU_USD" # Finnhub symbol untuk Gold
 DISPLAY_SYMBOL = "XAUUSD"
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0,
@@ -31,7 +34,7 @@ DEFAULT_SETTINGS = {
 
 CACHE = {"data": None, "timestamp": 0, "last_good": None}
 SIGNALS_CACHE: Dict[str, any] = {"signals": [], "clients": set()}
-MT5_LIVE_DATA = {"price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "", "balance": 0, "equity": 0, "margin": 0, "free_margin": 0}
+MT5_LIVE_DATA = {"price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "", "balance": 10000, "equity": 10000, "margin": 0, "free_margin": 10000}
 
 class SettingsModel(BaseModel):
     risk_per_trade: float = Field(1.0, gt=0, le=10)
@@ -59,15 +62,6 @@ class NewSignalModel(BaseModel):
     tp3: Optional[float] = None
     source: str = "MANUAL"
     confidence: int = 85
-
-class MT5TickModel(BaseModel):
-    symbol: str
-    bid: float
-    ask: float
-    balance: Optional[float] = 0
-    equity: Optional[float] = 0
-    margin: Optional[float] = 0
-    free_margin: Optional[float] = 0
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
@@ -109,7 +103,7 @@ def get_mt5_data_cached():
     if CACHE["data"] and now - CACHE["timestamp"] < 1:
         return CACHE["data"]
     if MT5_LIVE_DATA["price"] == 0:
-        return {"error": "Waiting for MT5 data..."}
+        return {"error": "Waiting for Finnhub data..."}
     
     jakarta_time = get_jakarta_time()
     data = {
@@ -185,17 +179,47 @@ async def signal_monitor():
             log_error(f"Monitor error: {e}")
         await asyncio.sleep(1)
 
+async def finnhub_fetcher():
+    global MT5_LIVE_DATA
+    if not FINNHUB_API_KEY:
+        log_error("FINNHUB_API_KEY not set. Set in Railway Variables.")
+        return
+    
+    log_info("Finnhub fetcher started")
+    url = f"https://finnhub.io/api/v1/quote?symbol={SYMBOL}&token={FINNHUB_API_KEY}"
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        price = data.get('c', 0) # current price
+                        if price > 0:
+                            MT5_LIVE_DATA["bid"] = round(price, 2)
+                            MT5_LIVE_DATA["ask"] = round(price + 0.15, 2) # Spread 1.5 pip
+                            MT5_LIVE_DATA["price"] = round(price, 2)
+                            MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S")
+                            log_info(f"Finnhub: {price}")
+                    elif resp.status == 429:
+                        log_warn("Finnhub rate limit. Slow down to 2s")
+                        await asyncio.sleep(2)
+                        continue
+            except Exception as e:
+                log_error(f"Finnhub error: {e}")
+            await asyncio.sleep(1)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path("logs").mkdir(exist_ok=True)
-    log_warn("Running in API-only mode. Waiting for /api/mt5-tick")
+    log_info("Starting Farone API with Finnhub")
     load_settings()
     load_signals_to_cache()
     asyncio.create_task(signal_monitor())
+    asyncio.create_task(finnhub_fetcher())
     yield
     log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="9.3 Railway", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="10.0 Finnhub", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -207,21 +231,13 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "mt5_mode": "api", "timestamp": get_jakarta_time().isoformat()}
-
-@app.post("/api/mt5-tick")
-async def receive_mt5_tick(data: MT5TickModel):
-    global MT5_LIVE_DATA
-    MT5_LIVE_DATA = data.model_dump()
-    MT5_LIVE_DATA["price"] = data.bid
-    MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S")
-    return {"status": "ok"}
+    return {"status": "ok", "data_source": "finnhub", "timestamp": get_jakarta_time().isoformat()}
 
 @app.get("/api/dashboard")
 def dashboard():
     mt5_data = get_mt5_data_cached()
     if "error" in mt5_data:
-        return {"error": mt5_data["error"], "ai_status": "WAITING MT5", "fallback": True}
+        return {"error": mt5_data["error"], "ai_status": "WAITING FINNHUB", "fallback": True}
     settings = load_settings()
     return {
         "ai_status": "ACTIVE",
@@ -286,6 +302,13 @@ async def create_signal(signal: NewSignalModel):
     await broadcast_signal(new_signal)
     return {"status": "success", "signal": new_signal}
 
+@app.get("/api/analytics")
+def get_analytics(days: int = 30):
+    return {
+        "equity_curve": [], "win_rate": 0, "profit_factor": 0,
+        "max_dd": 0, "sharpe": 0, "total_trades": 0
+    }
+
 @app.get("/api/settings")
 def get_settings():
     return load_settings()
@@ -297,4 +320,4 @@ def update_settings(data: SettingsModel):
 
 @app.get("/")
 async def root():
-    return {"message": "Farone API Online", "mt5_mode": "external"}
+    return {"message": "Farone API Online", "data_source": "finnhub"}
