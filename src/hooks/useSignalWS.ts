@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 
+// Base URL API lu yang bener
+const API_URL = 'https://api.faronecapital.online'
+
 export interface Signal {
   id: number
-  type: 'BUY' | 'SELL'
+  type: 'BUY' | 'SELL' | 'NONE'
   entry?: number
   sl?: number
   tp?: number
@@ -16,8 +19,26 @@ export interface Signal {
   pnl?: number
 }
 
+export interface LiveData {
+  ai_status: string
+  gold_price: number
+  ask_price: number
+  spread: number
+  symbol: string
+  balance: number
+  equity: number
+  updated_at: string
+  updated_date: string
+  active_signal: any
+  win_rate: number
+  total_trades: number
+  open_positions: number
+  data_source: string
+}
+
 export const useSignalWS = () => {
   const [signals, setSignals] = useState<Signal[]>([])
+  const [liveData, setLiveData] = useState<LiveData | null>(null)
   const [connected, setConnected] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<string>('-')
   const isMounted = useRef(true)
@@ -27,38 +48,43 @@ export const useSignalWS = () => {
 
     const fetchSignals = async () => {
       try {
-        const res = await fetch('/api/live')
-        
-        if (!res.ok) throw new Error('Failed to fetch')
-        
-        const data = await res.json()
-        
+        // Pake domain API yang bener
+        const res = await fetch(`${API_URL}/api/dashboard`, {
+          cache: 'no-store' // biar gak ke-cache browser
+        })
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        const data: LiveData = await res.json()
+
         if (!isMounted.current) return
 
-        // Kalo backend lu return {status: 'offline'}
-        if (data.status === 'offline') {
+        // Cek data valid
+        if (!data.gold_price) {
           setConnected(false)
           return
         }
 
-        // Mapping dari data KV ke format Signal
+        setLiveData(data)
+
+        // Mapping ke format Signal buat sidebar kiri
         const signalData: Signal = {
-          id: data.timestamp || Date.now(),
-          type: data.bias || 'BUY', // ganti sesuai field lu
-          entry: data.price || data.goldPrice,
-          sl: data.sl,
-          tp: data.tp || data.tp1,
-          tp1: data.tp1,
-          tp2: data.tp2,
-          status: data.status || 'LIVE',
-          time: new Date().toLocaleTimeString(),
-          source: data.symbol || 'XAUUSD',
-          confidence: data.confidence || 0,
-          pnl: data.profit || 0
+          id: Date.now(),
+          type: data.active_signal?.status === 'BUY'? 'BUY' :
+                data.active_signal?.status === 'SELL'? 'SELL' : 'NONE',
+          entry: data.gold_price, // pake gold_price dari API
+          sl: data.active_signal?.sl || 0,
+          tp: data.active_signal?.tp1 || 0,
+          tp1: data.active_signal?.tp1 || 0,
+          tp2: data.active_signal?.tp2 || 0,
+          status: data.ai_status || 'STANDBY',
+          time: data.updated_at || new Date().toLocaleTimeString(),
+          source: 'XAUUSD', // force XAUUSD biar gak XAUUSDc
+          confidence: data.active_signal?.confidence || 0,
+          pnl: data.equity - data.balance || 0
         }
 
-        // Kalo mau array, push ke signals
-        setSignals([signalData]) 
+        setSignals([signalData])
         setConnected(true)
         setLastUpdate(new Date().toLocaleTimeString())
 
@@ -79,6 +105,7 @@ export const useSignalWS = () => {
 
   return {
     signals,
+    liveData, // ini buat nampilin gold_price, spread, dll di dashboard
     connected,
     lastUpdate
   }
