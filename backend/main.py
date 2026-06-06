@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
@@ -9,7 +9,6 @@ import asyncio
 from contextlib import asynccontextmanager
 import httpx
 import os
-import time as time_module
 
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
 def log_error(msg): print(f"[ERROR] {datetime.utcnow()} {msg}")
@@ -22,7 +21,6 @@ DISPLAY_SYMBOL = "XAUUSD"
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
 CACHE_FILE = Path("price_cache.json")
-TD_API_KEY = os.getenv("TWELVEDATA_API_KEY", "")
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0, "max_daily_dd": 3.0, "max_lot": 0.10, "kill_switch": True,
@@ -161,65 +159,58 @@ async def signal_monitor():
         except Exception as e: log_error(f"Monitor error: {e}")
         await asyncio.sleep(1)
 
-# FIX BUG COROUTINE: await session.get() bukan async with
+# GANTI TOTAL: GAK PAKE TWELVEDATA. PAKE 2 API GRATIS + MT5 PRIORITAS
 async def price_fetcher():
     global MT5_LIVE_DATA, LAST_MT5_UPDATE
-    log_info("Price fetcher started - TwelveData Primary")
+    log_info("Price fetcher started - No TwelveData")
     async with httpx.AsyncClient() as session:
         while True:
             try:
+                # 1. Skip kalo MT5 baru update < 30 detik
                 if datetime.now().timestamp() - LAST_MT5_UPDATE < 30:
                     await asyncio.sleep(5); continue
 
-                if TD_API_KEY:
-                    url_price = f"https://api.twelvedata.com/price?symbol=XAU/USD&apikey={TD_API_KEY}"
-                    url_quote = f"https://api.twelvedata.com/quote?symbol=XAU/USD&apikey={TD_API_KEY}"
-                    # FIX: pake await langsung, bukan async with
-                    p_res = await session.get(url_price, timeout=5)
-                    q_res = await session.get(url_quote, timeout=5)
-                    if p_res.status_code == 200 and q_res.status_code == 200:
-                        price = float(p_res.json()["price"])
-                        quote = q_res.json()
-                        change = float(quote.get("change", 0))
-                        change_pct = float(quote.get("percent_change", 0))
+                # 2. GOLD-API.COM - gratis no key
+                try:
+                    resp = await session.get("https://api.gold-api.com/price/XAU", timeout=5)
+                    if resp.status_code == 200:
+                        price = float(resp.json()["price"])
                         MT5_LIVE_DATA["bid"] = round(price, 2)
                         MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
                         MT5_LIVE_DATA["price"] = round(price, 2)
-                        MT5_LIVE_DATA["daily_change"] = change
-                        MT5_LIVE_DATA["daily_change_pct"] = change_pct
-                        MT5_LIVE_DATA["source"] = "TWELVEDATA"
-                        save_price_cache(MT5_LIVE_DATA["price"], MT5_LIVE_DATA["ask"], change)
-                        log_info(f"TwelveData: {price} {change:+.2f}")
-                        await asyncio.sleep(8); continue
-
-                # Fallback FCSAPI
-                url = "https://fcsapi.com/api-v3/forex/latest?symbol=XAU/USD&access_key=free"
-                resp = await session.get(url, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("status") and data["response"]:
-                        price = float(data["response"][0]["c"])
-                        MT5_LIVE_DATA["bid"] = round(price, 2)
-                        MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
-                        MT5_LIVE_DATA["price"] = round(price, 2)
-                        MT5_LIVE_DATA["source"] = "FCSAPI"
+                        MT5_LIVE_DATA["source"] = "GOLDAPI"
                         save_price_cache(price, price + 0.15, 0)
-                        log_info(f"FCSAPI: {price}")
-                        await asyncio.sleep(60); continue
+                        log_info(f"GoldAPI: {price}")
+                        await asyncio.sleep(10); continue
+                except: pass
+
+                # 3. METALS-API.COM free tier
+                try:
+                    resp = await session.get("https://api.metals.live/v1/spot/gold", timeout=5)
+                    if resp.status_code == 200:
+                        price = float(resp.json()[0]["price"])
+                        MT5_LIVE_DATA["bid"] = round(price, 2)
+                        MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
+                        MT5_LIVE_DATA["price"] = round(price, 2)
+                        MT5_LIVE_DATA["source"] = "METALSAPI"
+                        save_price_cache(price, price + 0.15, 0)
+                        log_info(f"MetalsAPI: {price}")
+                        await asyncio.sleep(10); continue
+                except: pass
 
                 log_warn("All APIs failed, using cache")
             except Exception as e: log_error(f"Fetcher error: {e}")
-            await asyncio.sleep(8)
+            await asyncio.sleep(10)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path("logs").mkdir(exist_ok=True)
-    log_info("Starting Farone API - TwelveData")
+    log_info("Starting Farone API - No WebSocket")
     load_settings(); load_signals_to_cache()
     asyncio.create_task(signal_monitor()); asyncio.create_task(price_fetcher())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="12.2 Fixed", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="13.0 No-WS", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/health")
