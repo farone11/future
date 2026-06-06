@@ -17,7 +17,7 @@ def log_warn(msg): print(f"[WARN] {datetime.utcnow()} {msg}")
 def get_jakarta_time():
     return datetime.utcnow() + timedelta(hours=7)
 
-SYMBOL = "OANDA:XAU_USD" # Finnhub symbol untuk Gold
+SYMBOL = "OANDA:XAU_USD"
 DISPLAY_SYMBOL = "XAUUSD"
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
@@ -162,7 +162,7 @@ async def signal_monitor():
                         elif signal.get("tp2") and bid >= signal["tp2"]: new_status = "CLOSED"
                         elif bid >= signal["tp1"]: new_status = "CLOSED"
                         elif bid <= signal["sl"]: new_status = "CLOSED"
-                    else: # SELL
+                    else:
                         if signal.get("tp3") and ask <= signal["tp3"]: new_status = "CLOSED"
                         elif signal.get("tp2") and ask <= signal["tp2"]: new_status = "CLOSED"
                         elif ask <= signal["tp1"]: new_status = "CLOSED"
@@ -193,17 +193,16 @@ async def finnhub_fetcher():
                 async with session.get(url, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        price = data.get('c', 0) # current price
-                        prev_close = data.get('pc', 0) # previous close
+                        price = data.get('c', 0)
+                        prev_close = data.get('pc', 0)
                         
-                        # Kalo market tutup, pake prev close
                         if price == 0 and prev_close > 0:
                             price = prev_close
                             log_info(f"Market closed. Using prev close: {price}")
                         
                         if price > 0:
                             MT5_LIVE_DATA["bid"] = round(price, 2)
-                            MT5_LIVE_DATA["ask"] = round(price + 0.15, 2) # Spread 1.5 pip
+                            MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
                             MT5_LIVE_DATA["price"] = round(price, 2)
                             MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S")
                             log_info(f"Finnhub: {price}")
@@ -211,6 +210,8 @@ async def finnhub_fetcher():
                         log_warn("Finnhub rate limit. Slow down to 2s")
                         await asyncio.sleep(2)
                         continue
+                    else:
+                        log_error(f"Finnhub status {resp.status}")
             except Exception as e:
                 log_error(f"Finnhub error: {e}")
             await asyncio.sleep(1)
