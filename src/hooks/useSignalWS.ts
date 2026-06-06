@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:5400/ws/signals'
-
 export interface Signal {
   id: number
   type: 'BUY' | 'SELL'
@@ -27,15 +25,23 @@ export const useSignalWS = () => {
   const reconnectTimer = useRef<NodeJS.Timeout>()
   const heartbeatTimer = useRef<NodeJS.Timeout>()
   const retryCount = useRef(0)
+  const isMounted = useRef(true)
 
   const connectWS = useCallback(() => {
+    if (!isMounted.current) return
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
     if (heartbeatTimer.current) clearInterval(heartbeatTimer.current)
     if (ws.current?.readyState === WebSocket.OPEN) return
 
-    ws.current = new WebSocket(WS_URL)
+    // FIX 1: Default ke WSS production, bukan localhost
+    const BASE_WS = import.meta.env.VITE_WS_URL || 'wss://api.faronecapital.online'
+    const WS_ENDPOINT = `${BASE_WS}/ws/signals`
+
+    console.log('[WS] Connecting to:', WS_ENDPOINT)
+    ws.current = new WebSocket(WS_ENDPOINT)
     
     ws.current.onopen = () => {
+      if (!isMounted.current) return
       console.log('[WS] Connected to signals')
       setConnected(true)
       retryCount.current = 0
@@ -48,6 +54,7 @@ export const useSignalWS = () => {
     }
     
     ws.current.onmessage = (event) => {
+      if (!isMounted.current) return
       try {
         const msg = JSON.parse(event.data)
         
@@ -59,13 +66,18 @@ export const useSignalWS = () => {
           setSignals(prev => {
             const exists = prev.find(s => s.id === msg.data.id)
             if (exists) {
-              return prev.map(s => s.id === msg.data.id? msg.data : s)
+              return prev.map(s => s.id === msg.data.id ? msg.data : s)
             }
-            return [msg.data,...prev]
+            return [msg.data, ...prev]
           })
           setLastUpdate(new Date().toLocaleTimeString())
         }
         if (msg.type === 'heartbeat' || msg.type === 'pong') {
+          setLastUpdate(new Date().toLocaleTimeString())
+        }
+        // FIX 2: Handle format langsung array dari backend lu
+        if (Array.isArray(msg)) {
+          setSignals(msg)
           setLastUpdate(new Date().toLocaleTimeString())
         }
       } catch (e) {
@@ -79,7 +91,8 @@ export const useSignalWS = () => {
     }
     
     ws.current.onclose = (e) => {
-      console.log(`[WS] Closed. Code: ${e.code}. Retry in ${Math.min(1000 * retryCount.current, 10000)/1000}s`)
+      if (!isMounted.current) return
+      console.log(`[WS] Closed. Code: ${e.code}. Retry in ${Math.min(1000 * Math.pow(2, retryCount.current), 10000)/1000}s`)
       setConnected(false)
       
       retryCount.current++
@@ -89,12 +102,18 @@ export const useSignalWS = () => {
   }, [])
 
   useEffect(() => {
+    isMounted.current = true
     connectWS()
     
     return () => {
+      // FIX 3: Prevent setState after unmount -> fix chart lemot
+      isMounted.current = false
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       if (heartbeatTimer.current) clearInterval(heartbeatTimer.current)
-      ws.current?.close()
+      if (ws.current) {
+        ws.current.close()
+        ws.current = null
+      }
     }
   }, [connectWS])
 
