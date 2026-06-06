@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
@@ -195,7 +195,7 @@ async def lifespan(app: FastAPI):
     yield
     log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="9.2 Railway", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="9.3 Railway", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
