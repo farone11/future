@@ -194,6 +194,13 @@ async def finnhub_fetcher():
                     if resp.status == 200:
                         data = await resp.json()
                         price = data.get('c', 0) # current price
+                        prev_close = data.get('pc', 0) # previous close
+                        
+                        # Kalo market tutup, pake prev close
+                        if price == 0 and prev_close > 0:
+                            price = prev_close
+                            log_info(f"Market closed. Using prev close: {price}")
+                        
                         if price > 0:
                             MT5_LIVE_DATA["bid"] = round(price, 2)
                             MT5_LIVE_DATA["ask"] = round(price + 0.15, 2) # Spread 1.5 pip
