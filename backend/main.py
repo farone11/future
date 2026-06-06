@@ -1,37 +1,30 @@
 from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
-from datetime import datetime, timedelta, time, timezone
+from datetime import datetime, timedelta, time
 import json
 from pathlib import Path
-from typing import List, Dict, Optional, Set
-import io
+from typing import Dict, Optional, Set
 import asyncio
 import traceback
 from contextlib import asynccontextmanager
 import os
 
-# Pake print biasa, gak usah loguru
+# Ganti loguru pake print biar gak nambah dependency
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
 def log_error(msg): print(f"[ERROR] {datetime.utcnow()} {msg}")
 def log_warn(msg): print(f"[WARN] {datetime.utcnow()} {msg}")
 
-# === MT5 DIHAPUS KARENA GAK JALAN DI LINUX ===
+# MT5 dimatikan total buat Railway Linux
 MT5_AVAILABLE = False
-try:
-    import MetaTrader5 as mt5
-    MT5_AVAILABLE = True
-except ImportError:
-    log_warn("MetaTrader5 not available. Running in API-only mode.")
+
+def get_jakarta_time():
+    return datetime.utcnow() + timedelta(hours=7) # GMT+7
 
 SYMBOL = "XAUUSDc"
 DISPLAY_SYMBOL = "XAUUSD"
-JAKARTA_TZ_OFFSET = 7 # GMT+7 gak perlu pytz
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
-
-def get_jakarta_time():
-    return datetime.utcnow() + timedelta(hours=JAKARTA_TZ_OFFSET)
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0,
@@ -103,7 +96,6 @@ def load_signals_to_cache():
         try:
             with open(SIGNALS_FILE, "r") as f:
                 SIGNALS_CACHE["signals"] = json.load(f)
-                log_info(f"Loaded {len(SIGNALS_CACHE['signals'])} signals")
         except Exception as e:
             log_error(f"Failed load signals: {e}")
             SIGNALS_CACHE["signals"] = []
@@ -122,7 +114,6 @@ def get_mt5_data_cached():
     now = datetime.now().timestamp()
     if CACHE["data"] and now - CACHE["timestamp"] < 1:
         return CACHE["data"]
-
     if MT5_LIVE_DATA["price"] == 0:
         return {"error": "Waiting for MT5 data..."}
     
@@ -144,26 +135,19 @@ def get_mt5_data_cached():
     CACHE["timestamp"] = now
     return data
 
-def get_daily_dd_percent() -> float:
-    return 0.0 # Disabled karena MT5 gak ada
-
 def get_active_signal() -> dict:
     ai_signals = [s for s in SIGNALS_CACHE["signals"] if s.get('source','').startswith('AI-') and s["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]]
-    if ai_signals:
-        return ai_signals[0]
+    if ai_signals: return ai_signals[0]
     for s in reversed(SIGNALS_CACHE["signals"]):
-        if s["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]:
-            return s
-    return {"status": "NONE", "entry": 0, "sl": 0, "tp1": 0, "tp2": 0, "tp3": 0, "rr": 0, "confidence": 0, "source": "NONE"}
+        if s["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]: return s
+    return {"status": "NONE", "entry": 0, "sl": 0, "tp1": 0, "confidence": 0, "source": "NONE"}
 
 async def broadcast_signal(signal: dict):
     dead_clients: Set[WebSocket] = set()
     payload = {"type": "signal_update", "data": signal}
     for client in SIGNALS_CACHE["clients"].copy():
-        try:
-            await client.send_json(payload)
-        except Exception:
-            dead_clients.add(client)
+        try: await client.send_json(payload)
+        except Exception: dead_clients.add(client)
     SIGNALS_CACHE["clients"] -= dead_clients
     save_signals()
 
@@ -175,17 +159,11 @@ async def signal_monitor():
             if "error" in mt5_data:
                 await asyncio.sleep(1)
                 continue
-
             bid, ask = mt5_data["price"], mt5_data["ask"]
             updated_signals = []
-
             for signal in SIGNALS_CACHE["signals"]:
                 old_status = signal["status"]
                 new_status = old_status
-                exit_price = signal.get("exit_price")
-                pnl = signal.get("pnl")
-                close_reason = signal.get("close_reason")
-
                 if signal["status"] == "WAITING":
                     if signal["type"] == "BUY" and ask <= signal["entry"]:
                         new_status = "ACTIVE"
@@ -193,51 +171,25 @@ async def signal_monitor():
                     elif signal["type"] == "SELL" and bid >= signal["entry"]:
                         new_status = "ACTIVE"
                         signal["triggered_at"] = get_jakarta_time().isoformat()
-
                 elif signal["status"] == "ACTIVE":
                     if signal["type"] == "BUY":
-                        if signal.get("tp3") and bid >= signal["tp3"]:
-                            new_status = "CLOSED"; close_reason = "TP3_HIT"; exit_price = signal["tp3"]
-                            pnl = round((exit_price - signal["entry"]) * 100, 2)
-                        elif signal.get("tp2") and bid >= signal["tp2"]:
-                            new_status = "CLOSED"; close_reason = "TP2_HIT"; exit_price = signal["tp2"]
-                            pnl = round((exit_price - signal["entry"]) * 100, 2)
-                        elif bid >= signal["tp1"]:
-                            new_status = "CLOSED"; close_reason = "TP1_HIT"; exit_price = signal["tp1"]
-                            pnl = round((exit_price - signal["entry"]) * 100, 2)
-                        elif bid <= signal["sl"]:
-                            new_status = "CLOSED"; close_reason = "SL_HIT"; exit_price = signal["sl"]
-                            pnl = round((signal["sl"] - signal["entry"]) * 100, 2)
+                        if signal.get("tp3") and bid >= signal["tp3"]: new_status = "CLOSED"
+                        elif signal.get("tp2") and bid >= signal["tp2"]: new_status = "CLOSED"
+                        elif bid >= signal["tp1"]: new_status = "CLOSED"
+                        elif bid <= signal["sl"]: new_status = "CLOSED"
                     else: # SELL
-                        if signal.get("tp3") and ask <= signal["tp3"]:
-                            new_status = "CLOSED"; close_reason = "TP3_HIT"; exit_price = signal["tp3"]
-                            pnl = round((signal["entry"] - exit_price) * 100, 2)
-                        elif signal.get("tp2") and ask <= signal["tp2"]:
-                            new_status = "CLOSED"; close_reason = "TP2_HIT"; exit_price = signal["tp2"]
-                            pnl = round((signal["entry"] - exit_price) * 100, 2)
-                        elif ask <= signal["tp1"]:
-                            new_status = "CLOSED"; close_reason = "TP1_HIT"; exit_price = signal["tp1"]
-                            pnl = round((signal["entry"] - exit_price) * 100, 2)
-                        elif ask >= signal["sl"]:
-                            new_status = "CLOSED"; close_reason = "SL_HIT"; exit_price = signal["sl"]
-                            pnl = round((signal["entry"] - signal["sl"]) * 100, 2)
-
+                        if signal.get("tp3") and ask <= signal["tp3"]: new_status = "CLOSED"
+                        elif signal.get("tp2") and ask <= signal["tp2"]: new_status = "CLOSED"
+                        elif ask <= signal["tp1"]: new_status = "CLOSED"
+                        elif ask >= signal["sl"]: new_status = "CLOSED"
                 signal["current_price"] = bid if signal["type"] == "BUY" else ask
-
                 if new_status!= old_status:
                     signal["status"] = new_status
-                    signal["exit_price"] = exit_price
-                    signal["pnl"] = pnl
-                    signal["close_reason"] = close_reason
-                    if new_status == "CLOSED":
-                        signal["closed_at"] = get_jakarta_time().isoformat()
+                    if new_status == "CLOSED": signal["closed_at"] = get_jakarta_time().isoformat()
                     updated_signals.append(signal)
-
             if updated_signals:
                 save_signals()
-                for s in updated_signals:
-                    await broadcast_signal(s)
-
+                for s in updated_signals: await broadcast_signal(s)
         except Exception as e:
             log_error(f"Monitor error: {e}")
         await asyncio.sleep(1)
@@ -252,7 +204,7 @@ async def lifespan(app: FastAPI):
     yield
     log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="9.0 Railway", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="9.1 Railway", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -279,23 +231,18 @@ def dashboard():
     mt5_data = get_mt5_data_cached()
     if "error" in mt5_data:
         return {"error": mt5_data["error"], "ai_status": "WAITING MT5", "fallback": True}
-
     settings = load_settings()
-    daily_dd = get_daily_dd_percent()
-    kill_switch_triggered = settings["kill_switch"] and daily_dd >= settings["max_daily_dd"]
-
     return {
-        "ai_status": "ACTIVE" if not kill_switch_triggered else "KILL SWITCH",
+        "ai_status": "ACTIVE",
         "gold_price": mt5_data["price"], "ask_price": mt5_data["ask"], "spread": mt5_data["spread"],
         "daily_change": mt5_data["daily_change"], "daily_change_pct": mt5_data["daily_change_pct"],
         "win_rate": 0, "total_trades": 0, "open_positions": 0,
         "active_signal": get_active_signal(),
         "risk_engine": {
-            "lot_size": settings["max_lot"], "drawdown": daily_dd, "max_daily_dd": settings["max_daily_dd"],
-            "status": "LOW RISK" if daily_dd < 1 else "MEDIUM RISK" if daily_dd < settings["max_daily_dd"] else "HIGH RISK",
-            "balance": mt5_data["balance"], "equity": mt5_data["equity"],
+            "lot_size": settings["max_lot"], "drawdown": 0, "max_daily_dd": settings["max_daily_dd"],
+            "status": "LOW RISK", "balance": mt5_data["balance"], "equity": mt5_data["equity"],
             "margin": mt5_data["margin"], "free_margin": mt5_data["free_margin"],
-            "kill_switch": kill_switch_triggered
+            "kill_switch": False
         },
         "updated_at": mt5_data["time"], "updated_date": mt5_data["date"], "symbol": DISPLAY_SYMBOL
     }
@@ -308,8 +255,7 @@ async def websocket_dashboard(websocket: WebSocket):
             data = dashboard()
             await websocket.send_json(data)
             await asyncio.sleep(1)
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect: pass
 
 @app.websocket("/ws/signals")
 async def websocket_signals(websocket: WebSocket):
@@ -323,10 +269,8 @@ async def websocket_signals(websocket: WebSocket):
                 if data == "ping": await websocket.send_json({"type": "pong"})
             except asyncio.TimeoutError:
                 await websocket.send_json({"type": "heartbeat", "time": get_jakarta_time().strftime("%H:%M:%S")})
-    except WebSocketDisconnect:
-        pass
-    finally:
-        SIGNALS_CACHE["clients"].discard(websocket)
+    except WebSocketDisconnect: pass
+    finally: SIGNALS_CACHE["clients"].discard(websocket)
 
 @app.get("/api/signals")
 def get_signals():
@@ -337,7 +281,6 @@ async def create_signal(signal: NewSignalModel):
     rr = round(abs(signal.tp - signal.entry) / abs(signal.entry - signal.sl), 1) if signal.entry!= signal.sl else 0
     mt5_data = get_mt5_data_cached()
     current_price = mt5_data.get("price", signal.entry)
-
     new_signal = {
         "id": int(datetime.now().timestamp() * 1000), "pair": "XAUUSD",
         "type": signal.type.upper(), "entry": signal.entry, "sl": signal.sl,
@@ -345,9 +288,8 @@ async def create_signal(signal: NewSignalModel):
         "status": "WAITING" if abs(current_price - signal.entry) > 0.5 else "ACTIVE",
         "time": get_jakarta_time().strftime("%H:%M:%S"),
         "date": get_jakarta_time().strftime("%Y-%m-%d"),
-        "confidence": signal.confidence,
-        "source": signal.source, "rr": rr, "pnl": None, "current_price": current_price,
-        "close_reason": None, "closed_at": None, "triggered_at": None
+        "confidence": signal.confidence, "source": signal.source, "rr": rr, "pnl": None, 
+        "current_price": current_price, "close_reason": None, "closed_at": None, "triggered_at": None
     }
     SIGNALS_CACHE["signals"].insert(0, new_signal)
     await broadcast_signal(new_signal)
