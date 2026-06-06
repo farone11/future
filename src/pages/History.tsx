@@ -1,11 +1,10 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Download, TrendingUp, TrendingDown } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
-const WS_SIGNALS_URL = import.meta.env.VITE_WS_URL || 'wss://api.faronecapital.online'
+const API_URL = import.meta.env.VITE_API_URL
 
 interface Signal {
   id: number
@@ -53,13 +52,10 @@ export default function History() {
   const [days, setDays] = useState(30)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const wsSignals = useRef<WebSocket | null>(null)
 
   const fetchData = async () => {
     try {
-      setLoading(true)
       setError(null)
-      
       const [signalsRes, historyRes, analyticsRes] = await Promise.all([
         fetch(`${API_URL}/api/signals`),
         fetch(`${API_URL}/api/history?days=${days}`),
@@ -68,7 +64,6 @@ export default function History() {
 
       if (signalsRes.ok) {
         const data = await signalsRes.json()
-        // FIX: Ambil array dari object
         const signalsArray = Array.isArray(data) ? data : (data.signals || [])
         setSignals(signalsArray)
       }
@@ -91,51 +86,12 @@ export default function History() {
     }
   }
 
+  // POLLING TIAP 10 DETIK. GAK USAH WEBSOCKET.
   useEffect(() => {
     fetchData()
+    const interval = setInterval(fetchData, 10000)
+    return () => clearInterval(interval)
   }, [days])
-
-  // WebSocket real-time update
-  useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout | null = null
-    let isMounted = true
-
-    const connectWS = () => {
-      if (!isMounted) return
-      wsSignals.current = new WebSocket(WS_SIGNALS_URL)
-
-      wsSignals.current.onmessage = (event) => {
-        if (!isMounted) return
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'signal_update' && msg.data.status === 'CLOSED') {
-            // Tambah ke list kalo baru close
-            setSignals(prev => {
-              const exists = prev.find(s => s.id === msg.data.id)
-              if (exists) {
-                return prev.map(s => s.id === msg.data.id ? msg.data : s)
-              }
-              return [msg.data,...prev]
-            })
-          }
-        } catch (e) {
-          console.error('WS parse error:', e)
-        }
-      }
-
-      wsSignals.current.onclose = () => {
-        if (!isMounted) return
-        reconnectTimeout = setTimeout(connectWS, 3000)
-      }
-    }
-
-    connectWS()
-    return () => {
-      isMounted = false
-      wsSignals.current?.close()
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-    }
-  }, [])
 
   // Gabungin AI signals + MT5 trades
   const allTrades = [
