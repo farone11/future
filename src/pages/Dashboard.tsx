@@ -1,59 +1,16 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
 import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff, AlertTriangle } from 'lucide-react'
+import { useSignalWS } from '@/hooks/useSignalWS' // <-- PAKE HOOK BENER
 
-// Gak pake fallback localhost biar ketahuan kalo env gagal
+// CUMA BUTUH API_URL, BUANG WS_URL
 const API_URL = import.meta.env.VITE_API_URL
-const WS_URL = import.meta.env.VITE_WS_URL
-const WS_SIGNALS_URL = import.meta.env.VITE_WS_SIGNALS_URL || WS_URL?.replace('/ws/live', '/ws/signals')
 
-if (!API_URL ||!WS_URL) {
-  console.error('ENV GAGAL: VITE_API_URL atau VITE_WS_URL tidak ke-set di Cloudflare Pages')
-}
-
-interface DashboardData {
-  ai_status: string
-  gold_price: number
-  ask_price?: number
-  spread?: number
-  daily_change: number
-  daily_change_pct: number
-  win_rate: number
-  total_trades: number
-  active_signal: {
-    id?: number
-    status: 'BUY' | 'SELL' | 'NONE' | 'WAITING' | 'ACTIVE' | 'TRIGGERED' | 'CLOSED'
-    entry: number
-    sl: number
-    tp1: number
-    tp2?: number
-    tp3?: number
-    rr?: number
-    confidence?: number
-    source?: string
-    time?: string
-    current_price?: number
-    pnl?: number
-  }
-  risk_engine: {
-    lot_size: number
-    drawdown: number
-    max_daily_dd: number
-    status: string
-    kill_switch: boolean
-    balance: number
-    equity: number
-    margin?: number
-    free_margin?: number
-  }
-  open_positions?: number
-  updated_at: string
-  updated_date?: string
-  data_source?: string
-  error?: string
+if (!API_URL) {
+  console.error('ENV GAGAL: VITE_API_URL tidak ke-set di Cloudflare Pages')
 }
 
 interface AnalyticsData {
@@ -116,158 +73,50 @@ function SkeletonCard() {
 
 export default function Dashboard() {
   const [time, setTime] = useState(new Date())
-  const [data, setData] = useState<DashboardData | null>(null)
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const wsLive = useRef<WebSocket | null>(null)
-  const wsSignals = useRef<WebSocket | null>(null)
-  const [wsConnected, setWsConnected] = useState(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
+
+  // PAKE HOOK INI DOANG. UDAH GAK ADA WEBSOCKET.
+  const { liveData: data, connected: wsConnected, signals } = useSignalWS()
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
+  // FETCH SETTINGS & ANALYTICS AJA. DATA UTAMA DARI useSignalWS
   useEffect(() => {
     if (!API_URL) {
-      setError('VITE_API_URL tidak ke-set. Cek Cloudflare Pages Environment Variables')
       setLoading(false)
       return
     }
 
-    abortControllerRef.current = new AbortController()
     const fetchAll = async () => {
       try {
-        const [settingsRes, analyticsRes, dashboardRes] = await Promise.all([
-          fetch(`${API_URL}/api/settings`, { signal: abortControllerRef.current?.signal }),
-          fetch(`${API_URL}/api/analytics?days=30`, { signal: abortControllerRef.current?.signal }),
-          fetch(`${API_URL}/api/dashboard`, { signal: abortControllerRef.current?.signal })
+        const [settingsRes, analyticsRes] = await Promise.all([
+          fetch(`${API_URL}/api/settings`),
+          fetch(`${API_URL}/api/analytics?days=30`)
         ])
 
         if (settingsRes.ok) setSettings(await settingsRes.json())
         if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
-        if (dashboardRes.ok) {
-          const dashData = await dashboardRes.json()
-          setData(dashData)
-          if (dashData.error) setError(dashData.error)
-        }
 
       } catch (err: any) {
-        if (err.name!== 'AbortError') {
-          console.error('Fetch error:', err)
-          setError(`Backend unreachable: ${API_URL}`)
-        }
+        console.error('Fetch error:', err)
       } finally {
         setLoading(false)
       }
     }
     fetchAll()
-    return () => abortControllerRef.current?.abort()
   }, [])
 
+  // KILL SWITCH TOAST
   useEffect(() => {
-    if (!WS_URL) return
-    let reconnectTimeout: NodeJS.Timeout | null = null
-    let reconnectAttempts = 0
-    let isMounted = true
-
-    const connectWS = () => {
-      if (!isMounted) return
-      wsLive.current = new WebSocket(WS_URL)
-
-      wsLive.current.onopen = () => {
-        if (!isMounted) return
-        setError(null)
-        setWsConnected(true)
-        reconnectAttempts = 0
-      }
-
-      wsLive.current.onmessage = (event) => {
-        if (!isMounted) return
-        try {
-          const liveData = JSON.parse(event.data)
-          setData(prev => {
-            if (liveData.risk_engine?.kill_switch &&!prev?.risk_engine?.kill_switch) {
-              toast.error('🚨 KILL SWITCH TRIGGERED', { duration: 10000 })
-            }
-            return {...prev,...liveData }
-          })
-        } catch (e) {
-          console.error('WS parse error:', e)
-        }
-      }
-
-      wsLive.current.onerror = () => {
-        if (!isMounted) return
-        setWsConnected(false)
-      }
-
-      wsLive.current.onclose = () => {
-        if (!isMounted) return
-        setWsConnected(false)
-        reconnectAttempts++
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)
-        reconnectTimeout = setTimeout(connectWS, delay)
-      }
+    if (data?.risk_engine?.kill_switch) {
+      toast.error('🚨 KILL SWITCH TRIGGERED', { duration: 10000 })
     }
-
-    connectWS()
-    return () => {
-      isMounted = false
-      wsLive.current?.close()
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!WS_SIGNALS_URL) return
-    let reconnectTimeout: NodeJS.Timeout | null = null
-    let isMounted = true
-
-    const connectSignalsWS = () => {
-      if (!isMounted) return
-      wsSignals.current = new WebSocket(WS_SIGNALS_URL)
-
-      wsSignals.current.onmessage = (event) => {
-        if (!isMounted) return
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'signal_update') {
-            const updatedSignal = msg.data
-            setData(prev => {
-              if (!prev) return prev
-              if (prev.active_signal?.id === updatedSignal.id || prev.active_signal?.entry === updatedSignal.entry) {
-                if (updatedSignal.status === 'ACTIVE' && prev.active_signal?.status === 'WAITING') {
-                  toast.success(`🎯 Signal TRIGGERED: ${updatedSignal.type} @ ${updatedSignal.entry}`)
-                } else if (updatedSignal.status.includes('HIT')) {
-                  toast.success(`✅ ${updatedSignal.status}: PnL $${updatedSignal.pnl?.toFixed(2)}`)
-                }
-                return {...prev, active_signal: {...prev.active_signal,...updatedSignal } }
-              }
-              return prev
-            })
-          }
-        } catch (e) {
-          console.error('Signals WS parse error:', e)
-        }
-      }
-
-      wsSignals.current.onclose = () => {
-        if (!isMounted) return
-        reconnectTimeout = setTimeout(connectSignalsWS, 3000)
-      }
-    }
-
-    connectSignalsWS()
-    return () => {
-      isMounted = false
-      wsSignals.current?.close()
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-    }
-  }, [])
+  }, [data?.risk_engine?.kill_switch])
 
   const timeStr = time.toLocaleTimeString('en-US', { hour12: false })
   const dateStr = time.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
@@ -309,10 +158,10 @@ export default function Dashboard() {
       badge={
         <div className="flex items-center gap-2">
           {wsConnected? <Wifi size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
-          {wsConnected? 'Live WS' : 'Reconnecting'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
+          {wsConnected? 'LIVE' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
         </div>
       }
-      badgeColor={error? 'text-red-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
+      badgeColor={!wsConnected? 'text-red-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
     >
       {killSwitchActive && (
         <div className="mb-4 px-3 py-2 border border-red-500/50 bg-red-500/10 rounded text-red-200 text-sm animate-pulse">
@@ -320,9 +169,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {error &&!wsConnected && (
+      {!wsConnected && (
         <div className="mb-4 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded text-red-200/70 text-xs">
-          <span className="text-red-400 font-semibold">ERROR:</span> {error}
+          <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check Railway logs.
         </div>
       )}
 
@@ -496,7 +345,6 @@ export default function Dashboard() {
               Recovery: <span className="text-green-400">{analytics?.recovery_factor?.toFixed(2) || '0.00'}</span> |
               Sortino: <span className="text-blue-400">{analytics?.sortino_ratio?.toFixed(2) || '0.00'}</span>
             </div>
-          </div>
           <EquityChart data={analytics?.equity_curve || []} />
           <div className="w-full mt-3" style={{ height: 280 }}>
             <iframe
