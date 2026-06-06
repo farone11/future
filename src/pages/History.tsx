@@ -4,8 +4,8 @@ import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { Download, TrendingUp, TrendingDown } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5400'
-const WS_SIGNALS_URL = import.meta.env.VITE_WS_SIGNALS_URL || 'ws://127.0.0.1:5400/ws/signals'
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
+const WS_SIGNALS_URL = import.meta.env.VITE_WS_URL || 'wss://api.faronecapital.online'
 
 interface Signal {
   id: number
