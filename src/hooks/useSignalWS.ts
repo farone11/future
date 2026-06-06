@@ -33,7 +33,6 @@ export const useSignalWS = () => {
     if (heartbeatTimer.current) clearInterval(heartbeatTimer.current)
     if (ws.current?.readyState === WebSocket.OPEN) return
 
-    // FIX 1: Default ke WSS production, bukan localhost
     const BASE_WS = import.meta.env.VITE_WS_URL || 'wss://api.faronecapital.online'
     const WS_ENDPOINT = `${BASE_WS}/ws/signals`
 
@@ -75,7 +74,6 @@ export const useSignalWS = () => {
         if (msg.type === 'heartbeat' || msg.type === 'pong') {
           setLastUpdate(new Date().toLocaleTimeString())
         }
-        // FIX 2: Handle format langsung array dari backend lu
         if (Array.isArray(msg)) {
           setSignals(msg)
           setLastUpdate(new Date().toLocaleTimeString())
@@ -106,7 +104,6 @@ export const useSignalWS = () => {
     connectWS()
     
     return () => {
-      // FIX 3: Prevent setState after unmount -> fix chart lemot
       isMounted.current = false
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       if (heartbeatTimer.current) clearInterval(heartbeatTimer.current)
