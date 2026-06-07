@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import asyncio
 from contextlib import asynccontextmanager
 import os
@@ -20,6 +20,7 @@ DISPLAY_SYMBOL = "XAUUSD"
 SETTINGS_FILE = Path("settings.json")
 SIGNALS_FILE = Path("signals.json")
 CACHE_FILE = Path("price_cache.json")
+HISTORY_FILE = Path("trade_history.json")
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0, "max_daily_dd": 3.0, "max_lot": 0.10, "kill_switch": True,
@@ -27,10 +28,9 @@ DEFAULT_SETTINGS = {
     "ai_modules": {"smc": True, "prz": True, "liquidity": True, "risk_ai": True}
 }
 
-# FIX 1: HAPUS CACHE, HAPUS DUPLIKAT
 MT5_LIVE_DATA = {
     "price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "",
-    "balance": 10000, "equity": 10000, "margin": 0, "free_margin": 10000,
+    "balance": 0, "equity": 0, "margin": 0, "free_margin": 0,
     "daily_change": 0, "daily_change_pct": 0, "source": "NONE", "time_msc": 0
 }
 LAST_MT5_UPDATE = 0
@@ -55,7 +55,6 @@ class NewSignalModel(BaseModel):
     tp2: Optional[float] = None; tp3: Optional[float] = None
     source: str = "MANUAL"; confidence: int = 85
 
-# FIX 2: Sesuaiin sama mt5_push.py
 class MT5TickModel(BaseModel):
     symbol: str
     bid: float
@@ -103,6 +102,17 @@ def save_price_cache(data: dict):
     with open(CACHE_FILE, "w") as f:
         json.dump(data, f)
 
+def load_trade_history() -> List[dict]:
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r") as f: return json.load(f)
+        except: pass
+    return []
+
+def save_trade_history(data: List[dict]):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
 def get_mt5_data_cached():
     if MT5_LIVE_DATA["source"] == "MT5":
         jakarta_time = get_jakarta_time()
@@ -136,6 +146,84 @@ def get_active_signal() -> dict:
         if s["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]: return s
     return {"status": "NONE", "entry": 0, "sl": 0, "tp1": 0, "confidence": 0, "source": "NONE"}
 
+def calculate_analytics(days: int = 30) -> dict:
+    signals = SIGNALS_CACHE["signals"]
+    history = load_trade_history()
+    
+    # Gabungin closed signals + mt5 history
+    all_trades = []
+    for s in signals:
+        if s["status"] == "CLOSED" and s.get("pnl") is not None:
+            all_trades.append({
+                "date": s.get("closed_at", s.get("date", "")),
+                "pnl": s["pnl"],
+                "type": s["type"]
+            })
+    
+    for h in history:
+        all_trades.append({
+            "date": h.get("date", ""),
+            "pnl": h.get("profit", 0),
+            "type": h.get("type", "")
+        })
+    
+    # Filter by days
+    cutoff = get_jakarta_time() - timedelta(days=days)
+    filtered_trades = []
+    for t in all_trades:
+        try:
+            trade_date = datetime.fromisoformat(t["date"].replace("Z", ""))
+            if trade_date >= cutoff:
+                filtered_trades.append(t)
+        except:
+            continue
+    
+    if not filtered_trades:
+        return {
+            "profit_factor": 0, "max_dd_pct": 0, "max_drawdown": 0,
+            "sharpe_ratio": 0, "sortino_ratio": 0, "expectancy": 0,
+            "recovery_factor": 0, "total_pl": 0, "equity_curve": []
+        }
+    
+    wins = [t["pnl"] for t in filtered_trades if t["pnl"] > 0]
+    losses = [t["pnl"] for t in filtered_trades if t["pnl"] < 0]
+    total_pl = sum(t["pnl"] for t in filtered_trades)
+    
+    gross_profit = sum(wins) if wins else 0
+    gross_loss = abs(sum(losses)) if losses else 0
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+    
+    # Equity curve sederhana
+    equity = 10000
+    equity_curve = []
+    max_equity = equity
+    max_dd = 0
+    
+    for t in sorted(filtered_trades, key=lambda x: x["date"]):
+        equity += t["pnl"]
+        max_equity = max(max_equity, equity)
+        dd = max_equity - equity
+        max_dd = max(max_dd, dd)
+        equity_curve.append({
+            "date": t["date"][:10],
+            "equity": round(equity, 2),
+            "drawdown": round(dd, 2)
+        })
+    
+    max_dd_pct = (max_dd / max_equity * 100) if max_equity > 0 else 0
+    
+    return {
+        "profit_factor": round(profit_factor, 2),
+        "max_dd_pct": round(max_dd_pct, 1),
+        "max_drawdown": round(max_dd, 2),
+        "sharpe_ratio": 0, # Perlu data lebih buat hitung beneran
+        "sortino_ratio": 0,
+        "expectancy": round(total_pl / len(filtered_trades), 2) if filtered_trades else 0,
+        "recovery_factor": round(total_pl / max_dd, 2) if max_dd > 0 else 0,
+        "total_pl": round(total_pl, 2),
+        "equity_curve": equity_curve[-30:] # 30 data terakhir
+    }
+
 async def signal_monitor():
     while True:
         try:
@@ -149,15 +237,15 @@ async def signal_monitor():
                     elif signal["type"] == "SELL" and bid >= signal["entry"]: new_status = "ACTIVE"; signal["triggered_at"] = get_jakarta_time().isoformat()
                 elif signal["status"] == "ACTIVE":
                     if signal["type"] == "BUY":
-                        if signal.get("tp3") and bid >= signal["tp3"]: new_status = "CLOSED"
-                        elif signal.get("tp2") and bid >= signal["tp2"]: new_status = "CLOSED"
-                        elif bid >= signal["tp1"]: new_status = "CLOSED"
-                        elif bid <= signal["sl"]: new_status = "CLOSED"
+                        if signal.get("tp3") and bid >= signal["tp3"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp3"] - signal["entry"]) * 100
+                        elif signal.get("tp2") and bid >= signal["tp2"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp2"] - signal["entry"]) * 100
+                        elif bid >= signal["tp1"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp1"] - signal["entry"]) * 100
+                        elif bid <= signal["sl"]: new_status = "CLOSED"; signal["pnl"] = (signal["sl"] - signal["entry"]) * 100
                     else:
-                        if signal.get("tp3") and ask <= signal["tp3"]: new_status = "CLOSED"
-                        elif signal.get("tp2") and ask <= signal["tp2"]: new_status = "CLOSED"
-                        elif ask <= signal["tp1"]: new_status = "CLOSED"
-                        elif ask >= signal["sl"]: new_status = "CLOSED"
+                        if signal.get("tp3") and ask <= signal["tp3"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp3"]) * 100
+                        elif signal.get("tp2") and ask <= signal["tp2"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp2"]) * 100
+                        elif ask <= signal["tp1"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp1"]) * 100
+                        elif ask >= signal["sl"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["sl"]) * 100
                 signal["current_price"] = bid if signal["type"] == "BUY" else ask
                 if new_status!= old_status:
                     signal["status"] = new_status
@@ -175,7 +263,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(signal_monitor())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="14.0 MT5-Only", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="14.1 MT5-Only", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/health")
@@ -212,12 +300,19 @@ async def receive_mt5_tick(data: MT5TickModel):
 def dashboard():
     mt5_data = get_mt5_data_cached()
     settings = load_settings()
+    closed_signals = [s for s in SIGNALS_CACHE["signals"] if s["status"] == "CLOSED" and s.get("pnl") is not None]
+    wins = [s for s in closed_signals if s["pnl"] > 0]
+    win_rate = round(len(wins) / len(closed_signals) * 100, 1) if closed_signals else 0
+    
     return {
         "ai_status": "ACTIVE" if mt5_data["source"] == "MT5_LIVE" else "STANDBY",
         "gold_price": mt5_data["price"], "ask_price": mt5_data["ask"],
         "spread": mt5_data["spread"], "daily_change": mt5_data["daily_change"],
-        "daily_change_pct": mt5_data["daily_change_pct"], "win_rate": 0,
-        "total_trades": 0, "open_positions": 0, "active_signal": get_active_signal(),
+        "daily_change_pct": mt5_data["daily_change_pct"], 
+        "win_rate": win_rate,
+        "total_trades": len(closed_signals), 
+        "open_positions": len([s for s in SIGNALS_CACHE["signals"] if s["status"] == "ACTIVE"]), 
+        "active_signal": get_active_signal(),
         "data_source": mt5_data["source"], "risk_engine": {
             "lot_size": settings["max_lot"], "drawdown": 0, "max_daily_dd": settings["max_daily_dd"],
             "status": "LOW RISK", "balance": mt5_data["balance"], "equity": mt5_data["equity"],
@@ -242,6 +337,24 @@ async def create_signal(signal: NewSignalModel):
     }
     SIGNALS_CACHE["signals"].insert(0, new_signal); save_signals()
     return {"status": "success", "signal": new_signal}
+
+# FIX 3: TAMBAHIN 2 ENDPOINT INI BIAR DASHBOARD NGGAK 404
+@app.get("/api/analytics")
+def get_analytics(days: int = 30):
+    return calculate_analytics(days)
+
+@app.get("/api/history")
+def get_history(days: int = 30):
+    trades = load_trade_history()
+    cutoff = get_jakarta_time() - timedelta(days=days)
+    filtered = []
+    for t in trades:
+        try:
+            if datetime.fromisoformat(t["date"].replace("Z", "")) >= cutoff:
+                filtered.append(t)
+        except:
+            continue
+    return {"trades": filtered}
 
 @app.get("/api/settings")
 def get_settings(): return load_settings()
