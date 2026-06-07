@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Dict, Optional
 import asyncio
 from contextlib import asynccontextmanager
-import httpx
 import os
 
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
@@ -28,14 +27,13 @@ DEFAULT_SETTINGS = {
     "ai_modules": {"smc": True, "prz": True, "liquidity": True, "risk_ai": True}
 }
 
-CACHE = {"data": None, "timestamp": 0, "last_good": None}
-SIGNALS_CACHE: Dict[str, any] = {"signals": []}
 MT5_LIVE_DATA = {
     "price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "",
     "balance": 10000, "equity": 10000, "margin": 0, "free_margin": 10000,
-    "daily_change": 0, "daily_change_pct": 0, "source": "NONE"
+    "daily_change": 0, "daily_change_pct": 0, "source": "NONE", "time_msc": 0
 }
 LAST_MT5_UPDATE = 0
+SIGNALS_CACHE: Dict[str, any] = {"signals": []}
 
 class SettingsModel(BaseModel):
     risk_per_trade: float = Field(1.0, gt=0, le=10)
@@ -56,9 +54,18 @@ class NewSignalModel(BaseModel):
     tp2: Optional[float] = None; tp3: Optional[float] = None
     source: str = "MANUAL"; confidence: int = 85
 
+# INI YANG DIBENERIN: Sesuaiin sama mt5_push.py
 class MT5TickModel(BaseModel):
-    symbol: str; bid: float; ask: float; balance: Optional[float] = 0
-    equity: Optional[float] = 0; margin: Optional[float] = 0; free_margin: Optional[float] = 0
+    symbol: str
+    bid: float
+    ask: float
+    spread: Optional[float] = 0
+    time: Optional[int] = 0 # timestamp dari MT5
+    time_msc: Optional[int] = 0 # milisecond
+    balance: Optional[float] = 0
+    equity: Optional[float] = 0
+    margin: Optional[float] = 0
+    free_margin: Optional[float] = 0
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
@@ -89,37 +96,40 @@ def load_price_cache():
         try:
             with open(CACHE_FILE, "r") as f: return json.load(f)
         except: pass
-    return {"price": 4475.91, "ask": 4476.06, "time": get_jakarta_time().isoformat(), "change": 0}
+    return {"price": 0, "ask": 0, "bid": 0, "time": get_jakarta_time().isoformat(), "change": 0, "source": "NONE"}
 
-def save_price_cache(price, ask, change):
+def save_price_cache(data: dict):
     with open(CACHE_FILE, "w") as f:
-        json.dump({"price": price, "ask": ask, "time": get_jakarta_time().isoformat(), "change": change}, f)
+        json.dump(data, f)
 
+# SIMPLIFIED: Prioritas MT5 only, fallback ke cache terakhir
 def get_mt5_data_cached():
-    now = datetime.now().timestamp()
-    if CACHE["data"] and now - CACHE["timestamp"] < 1: return CACHE["data"]
-    if MT5_LIVE_DATA["price"] == 0:
-        cached = load_price_cache()
-        MT5_LIVE_DATA["bid"] = cached["price"]
-        MT5_LIVE_DATA["ask"] = cached["ask"]
-        MT5_LIVE_DATA["price"] = cached["price"]
-        MT5_LIVE_DATA["daily_change"] = cached.get("change", 0)
-        MT5_LIVE_DATA["source"] = "CACHE"
-
-    jakarta_time = get_jakarta_time()
-    data = {
-        "price": MT5_LIVE_DATA["bid"], "ask": MT5_LIVE_DATA["ask"],
-        "spread": round(MT5_LIVE_DATA["ask"] - MT5_LIVE_DATA["bid"], 2),
-        "daily_change": MT5_LIVE_DATA["daily_change"],
-        "daily_change_pct": MT5_LIVE_DATA["daily_change_pct"],
-        "time": jakarta_time.strftime("%H:%M:%S"),
-        "date": jakarta_time.strftime("%Y-%m-%d"),
-        "balance": MT5_LIVE_DATA["balance"], "equity": MT5_LIVE_DATA["equity"],
-        "margin": MT5_LIVE_DATA["margin"], "free_margin": MT5_LIVE_DATA["free_margin"],
-        "source": MT5_LIVE_DATA["source"]
+    # Kalo MT5 udah pernah update, pake itu
+    if MT5_LIVE_DATA["source"] == "MT5":
+        jakarta_time = get_jakarta_time()
+        return {
+            "price": MT5_LIVE_DATA["bid"], "ask": MT5_LIVE_DATA["ask"],
+            "spread": MT5_LIVE_DATA["spread"],
+            "daily_change": MT5_LIVE_DATA["daily_change"],
+            "daily_change_pct": MT5_LIVE_DATA["daily_change_pct"],
+            "time": jakarta_time.strftime("%H:%M:%S"),
+            "date": jakarta_time.strftime("%Y-%m-%d"),
+            "balance": MT5_LIVE_DATA["balance"], "equity": MT5_LIVE_DATA["equity"],
+            "margin": MT5_LIVE_DATA["margin"], "free_margin": MT5_LIVE_DATA["free_margin"],
+            "source": "MT5_LIVE"
+        }
+    
+    # Fallback ke cache file
+    cached = load_price_cache()
+    return {
+        "price": cached.get("price", 0), "ask": cached.get("ask", 0),
+        "spread": round(cached.get("ask", 0) - cached.get("price", 0), 2),
+        "daily_change": cached.get("change", 0), "daily_change_pct": 0,
+        "time": get_jakarta_time().strftime("%H:%M:%S"),
+        "date": get_jakarta_time().strftime("%Y-%m-%d"),
+        "balance": 0, "equity": 0, "margin": 0, "free_margin": 0,
+        "source": cached.get("source", "NONE")
     }
-    CACHE["data"] = data; CACHE["last_good"] = data; CACHE["timestamp"] = now
-    return data
 
 def get_active_signal() -> dict:
     ai_signals = [s for s in SIGNALS_CACHE["signals"] if s.get('source','').startswith('AI-') and s["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]]
@@ -132,7 +142,7 @@ async def signal_monitor():
     while True:
         try:
             mt5_data = get_mt5_data_cached()
-            if "error" in mt5_data: await asyncio.sleep(1); continue
+            if mt5_data["price"] == 0: await asyncio.sleep(1); continue
             bid, ask = mt5_data["price"], mt5_data["ask"]; updated = False
             for signal in SIGNALS_CACHE["signals"]:
                 old_status = signal["status"]; new_status = old_status
@@ -159,80 +169,55 @@ async def signal_monitor():
         except Exception as e: log_error(f"Monitor error: {e}")
         await asyncio.sleep(1)
 
-# GANTI TOTAL: GAK PAKE TWELVEDATA. PAKE 2 API GRATIS + MT5 PRIORITAS
-async def price_fetcher():
-    global MT5_LIVE_DATA, LAST_MT5_UPDATE
-    log_info("Price fetcher started - No TwelveData")
-    async with httpx.AsyncClient() as session:
-        while True:
-            try:
-                # 1. Skip kalo MT5 baru update < 30 detik
-                if datetime.now().timestamp() - LAST_MT5_UPDATE < 30:
-                    await asyncio.sleep(5); continue
-
-                # 2. GOLD-API.COM - gratis no key
-                try:
-                    resp = await session.get("https://api.gold-api.com/price/XAU", timeout=5)
-                    if resp.status_code == 200:
-                        price = float(resp.json()["price"])
-                        MT5_LIVE_DATA["bid"] = round(price, 2)
-                        MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
-                        MT5_LIVE_DATA["price"] = round(price, 2)
-                        MT5_LIVE_DATA["source"] = "GOLDAPI"
-                        save_price_cache(price, price + 0.15, 0)
-                        log_info(f"GoldAPI: {price}")
-                        await asyncio.sleep(10); continue
-                except: pass
-
-                # 3. METALS-API.COM free tier
-                try:
-                    resp = await session.get("https://api.metals.live/v1/spot/gold", timeout=5)
-                    if resp.status_code == 200:
-                        price = float(resp.json()[0]["price"])
-                        MT5_LIVE_DATA["bid"] = round(price, 2)
-                        MT5_LIVE_DATA["ask"] = round(price + 0.15, 2)
-                        MT5_LIVE_DATA["price"] = round(price, 2)
-                        MT5_LIVE_DATA["source"] = "METALSAPI"
-                        save_price_cache(price, price + 0.15, 0)
-                        log_info(f"MetalsAPI: {price}")
-                        await asyncio.sleep(10); continue
-                except: pass
-
-                log_warn("All APIs failed, using cache")
-            except Exception as e: log_error(f"Fetcher error: {e}")
-            await asyncio.sleep(10)
-
+# HAPUS price_fetcher - kamu nggak butuh gold-api. MT5 only
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path("logs").mkdir(exist_ok=True)
-    log_info("Starting Farone API - No WebSocket")
+    log_info("Starting Farone API - MT5 Only Mode")
     load_settings(); load_signals_to_cache()
-    asyncio.create_task(signal_monitor()); asyncio.create_task(price_fetcher())
+    asyncio.create_task(signal_monitor())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="13.0 No-WS", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="14.0 MT5-Only", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/api/health")
-def health(): return {"status": "ok", "data_source": MT5_LIVE_DATA["source"], "timestamp": get_jakarta_time().isoformat()}
+def health(): 
+    return {
+        "status": "ok", 
+        "data_source": MT5_LIVE_DATA["source"], 
+        "last_update": LAST_MT5_UPDATE,
+        "timestamp": get_jakarta_time().isoformat()
+    }
 
 @app.post("/api/mt5-tick")
 async def receive_mt5_tick(data: MT5TickModel):
     global MT5_LIVE_DATA, LAST_MT5_UPDATE
-    MT5_LIVE_DATA = data.model_dump()
-    MT5_LIVE_DATA["price"] = data.bid
-    MT5_LIVE_DATA["time"] = get_jakarta_time().strftime("%H:%M:%S")
-    MT5_LIVE_DATA["source"] = "MT5"
-    LAST_MT5_UPDATE = datetime.now().timestamp()
-    save_price_cache(data.bid, data.ask, 0)
-    return {"status": "ok"}
+    try:
+        MT5_LIVE_DATA.update(data.model_dump())
+        MT5_LIVE_DATA["price"] = data.bid # pake bid sebagai price
+        MT5_LIVE_DATA["source"] = "MT5"
+        LAST_MT5_UPDATE = datetime.now().timestamp()
+        
+        # Save ke cache biar nggak ilang pas restart
+        save_price_cache({
+            "price": data.bid, "ask": data.ask, "bid": data.bid,
+            "spread": data.spread, "time": get_jakarta_time().isoformat(),
+            "change": 0, "source": "MT5"
+        })
+        
+        log_info(f"MT5 Tick: {data.symbol} Bid:{data.bid} Ask:{data.ask}")
+        return {"status": "ok", "received": data.symbol}
+    except Exception as e:
+        log_error(f"Tick error: {e}")
+        return {"status": "error", "msg": str(e)}
 
 @app.get("/api/dashboard")
 def dashboard():
     mt5_data = get_mt5_data_cached()
     settings = load_settings()
     return {
-        "ai_status": "ACTIVE" if mt5_data["source"]!= "NONE" else "STANDBY",
+        "ai_status": "ACTIVE" if mt5_data["source"] == "MT5_LIVE" else "STANDBY",
         "gold_price": mt5_data["price"], "ask_price": mt5_data["ask"],
         "spread": mt5_data["spread"], "daily_change": mt5_data["daily_change"],
         "daily_change_pct": mt5_data["daily_change_pct"], "win_rate": 0,
