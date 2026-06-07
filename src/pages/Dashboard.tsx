@@ -3,7 +3,7 @@ import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
-import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle } from 'lucide-react'
+import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 
@@ -19,10 +19,12 @@ interface DashboardData {
   daily_change_pct: number
   win_rate: number
   total_trades: number
-  data_source: string
+  data_source: 'MT5_LIVE' | 'STALE' | 'NONE'
   spread: number
   updated_at: string
   updated_date: string
+  open_positions: number
+  last_update?: number
   active_signal: {
     status: 'BUY' | 'SELL' | 'NONE'
     entry: number
@@ -121,7 +123,7 @@ export default function Dashboard() {
     return () => clearInterval(t)
   }, [])
 
-  // FIX TOTAL: POLLING REST API, BUKAN WS
+  // POLLING REST API TIAP 1 DETIK
   useEffect(() => {
     if (!API_URL) {
       setLoading(false)
@@ -137,7 +139,8 @@ export default function Dashboard() {
         ])
 
         if (dashboardRes.ok) {
-          setData(await dashboardRes.json())
+          const liveData = await dashboardRes.json()
+          setData(liveData)
           setConnected(true)
         } else {
           setConnected(false)
@@ -155,7 +158,7 @@ export default function Dashboard() {
     }
     
     fetchAll()
-    const interval = setInterval(fetchAll, 1000) // Update tiap 1 detik
+    const interval = setInterval(fetchAll, 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -170,6 +173,8 @@ export default function Dashboard() {
 
   const killSwitchActive = data?.risk_engine?.kill_switch || false
   const aiModules = settings?.ai_modules || { smc: false, prz: false, liquidity: false, risk_ai: false }
+  const isLive = data?.data_source === 'MT5_LIVE'
+  const isStale = data?.data_source === 'STALE'
 
   const AI_PANEL = useMemo(() => [
     { model: 'SMC Engine', status: aiModules.smc? 'Active' : 'Off', color: aiModules.smc? 'text-green-400' : 'text-gray-500' },
@@ -205,11 +210,13 @@ export default function Dashboard() {
       subtitle={`Institutional Intelligence Layer · XAUUSD Analytics · ${data?.data_source || 'Loading'}`}
       badge={
         <div className="flex items-center gap-2">
-          {connected? <CheckCircle size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
-          {connected? 'LIVE' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
+          {isLive? <CheckCircle size={14} className="text-green-400" /> : 
+           isStale? <Clock size={14} className="text-yellow-400" /> : 
+           <WifiOff size={14} className="text-red-400" />}
+          {isLive? 'LIVE' : isStale? 'STANDBY' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
         </div>
       }
-      badgeColor={!connected? 'text-red-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
+      badgeColor={!connected? 'text-red-400' : isStale? 'text-yellow-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
     >
       {killSwitchActive && (
         <div className="mb-4 px-3 py-2 border border-red-500/50 bg-red-500/10 rounded text-red-200 text-sm animate-pulse">
@@ -220,6 +227,12 @@ export default function Dashboard() {
       {!connected && (
         <div className="mb-4 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded text-red-200/70 text-xs">
           <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check Railway logs.
+        </div>
+      )}
+
+      {isStale && (
+        <div className="mb-4 px-3 py-2 border border-yellow-500/30 bg-yellow-500/5 rounded text-yellow-200/70 text-xs">
+          <span className="text-yellow-400 font-semibold">STANDBY:</span> No new data from MT5 in 15+ seconds. Showing last cached price.
         </div>
       )}
 
@@ -297,11 +310,11 @@ export default function Dashboard() {
             <Card className="col-span-1">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-gray-400 text-xs uppercase tracking-widest">AI STATUS</div>
-                <span className={`text-xs ${killSwitchActive? 'text-red-400' : 'text-green-400'} border ${killSwitchActive? 'border-red-400/50' : 'border-green-400/50'} px-1 rounded`}>
-                  {killSwitchActive? 'Stop' : 'Live'}
+                <span className={`text-xs ${killSwitchActive? 'text-red-400' : isLive? 'text-green-400' : 'text-yellow-400'} border ${killSwitchActive? 'border-red-400/50' : isLive? 'border-green-400/50' : 'border-yellow-400/50'} px-1 rounded`}>
+                  {killSwitchActive? 'Stop' : isLive? 'Live' : 'Standby'}
                 </span>
               </div>
-              <div className={`text-xl font-bold ${killSwitchActive? 'text-red-400' : 'text-green-400'}`}>
+              <div className={`text-xl font-bold ${killSwitchActive? 'text-red-400' : isLive? 'text-green-400' : 'text-yellow-400'}`}>
                 {data?.ai_status || 'STANDBY'}
               </div>
               <div className="text-gray-500 text-xs mt-1">Equity: ${data?.risk_engine?.equity?.toFixed(0) || '0'}</div>
