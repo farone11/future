@@ -2,12 +2,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
-import json
-from pathlib import Path
 from typing import Dict, Optional
 import asyncio
 from contextlib import asynccontextmanager
 import os
+import json
+from pathlib import Path
 
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
 def log_error(msg): print(f"[ERROR] {datetime.utcnow()} {msg}")
@@ -27,6 +27,7 @@ DEFAULT_SETTINGS = {
     "ai_modules": {"smc": True, "prz": True, "liquidity": True, "risk_ai": True}
 }
 
+# FIX 1: HAPUS CACHE, HAPUS DUPLIKAT
 MT5_LIVE_DATA = {
     "price": 0, "ask": 0, "bid": 0, "spread": 0, "time": "",
     "balance": 10000, "equity": 10000, "margin": 0, "free_margin": 10000,
@@ -54,14 +55,14 @@ class NewSignalModel(BaseModel):
     tp2: Optional[float] = None; tp3: Optional[float] = None
     source: str = "MANUAL"; confidence: int = 85
 
-# INI YANG DIBENERIN: Sesuaiin sama mt5_push.py
+# FIX 2: Sesuaiin sama mt5_push.py
 class MT5TickModel(BaseModel):
     symbol: str
     bid: float
     ask: float
     spread: Optional[float] = 0
-    time: Optional[int] = 0 # timestamp dari MT5
-    time_msc: Optional[int] = 0 # milisecond
+    time: Optional[int] = 0
+    time_msc: Optional[int] = 0
     balance: Optional[float] = 0
     equity: Optional[float] = 0
     margin: Optional[float] = 0
@@ -102,9 +103,7 @@ def save_price_cache(data: dict):
     with open(CACHE_FILE, "w") as f:
         json.dump(data, f)
 
-# SIMPLIFIED: Prioritas MT5 only, fallback ke cache terakhir
 def get_mt5_data_cached():
-    # Kalo MT5 udah pernah update, pake itu
     if MT5_LIVE_DATA["source"] == "MT5":
         jakarta_time = get_jakarta_time()
         return {
@@ -119,7 +118,6 @@ def get_mt5_data_cached():
             "source": "MT5_LIVE"
         }
     
-    # Fallback ke cache file
     cached = load_price_cache()
     return {
         "price": cached.get("price", 0), "ask": cached.get("ask", 0),
@@ -169,7 +167,6 @@ async def signal_monitor():
         except Exception as e: log_error(f"Monitor error: {e}")
         await asyncio.sleep(1)
 
-# HAPUS price_fetcher - kamu nggak butuh gold-api. MT5 only
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path("logs").mkdir(exist_ok=True)
@@ -195,11 +192,10 @@ async def receive_mt5_tick(data: MT5TickModel):
     global MT5_LIVE_DATA, LAST_MT5_UPDATE
     try:
         MT5_LIVE_DATA.update(data.model_dump())
-        MT5_LIVE_DATA["price"] = data.bid # pake bid sebagai price
+        MT5_LIVE_DATA["price"] = data.bid
         MT5_LIVE_DATA["source"] = "MT5"
         LAST_MT5_UPDATE = datetime.now().timestamp()
         
-        # Save ke cache biar nggak ilang pas restart
         save_price_cache({
             "price": data.bid, "ask": data.ask, "bid": data.bid,
             "spread": data.spread, "time": get_jakarta_time().isoformat(),
