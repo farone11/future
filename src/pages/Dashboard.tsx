@@ -3,13 +3,51 @@ import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
-import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff, AlertTriangle, CheckCircle } from 'lucide-react'
-import { useSignalWS } from '@/hooks/useSignalWS'
+import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 
 if (!API_URL) {
   console.error('ENV GAGAL: VITE_API_URL tidak ke-set di Cloudflare Pages')
+}
+
+interface DashboardData {
+  ai_status: string
+  gold_price: number
+  ask_price: number
+  daily_change: number
+  daily_change_pct: number
+  win_rate: number
+  total_trades: number
+  data_source: string
+  spread: number
+  updated_at: string
+  updated_date: string
+  active_signal: {
+    status: 'BUY' | 'SELL' | 'NONE'
+    entry: number
+    sl: number
+    tp1: number
+    tp2?: number
+    tp3?: number
+    source?: string
+    confidence?: number
+    rr?: number
+    current_price?: number
+    pnl?: number
+    time?: string
+  }
+  risk_engine: {
+    lot_size: number
+    drawdown: number
+    max_daily_dd: number
+    status: string
+    balance: number
+    equity: number
+    margin: number
+    free_margin: number
+    kill_switch: boolean
+  }
 }
 
 interface AnalyticsData {
@@ -72,18 +110,18 @@ function SkeletonCard() {
 
 export default function Dashboard() {
   const [time, setTime] = useState(new Date())
+  const [data, setData] = useState<DashboardData | null>(null)
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [loading, setLoading] = useState(true)
-
-  // PAKE HOOK INI. `connected` = status HTTP polling, BUKAN WS
-  const { liveData: data, connected } = useSignalWS()
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
+  // FIX TOTAL: POLLING REST API, BUKAN WS
   useEffect(() => {
     if (!API_URL) {
       setLoading(false)
@@ -92,21 +130,33 @@ export default function Dashboard() {
 
     const fetchAll = async () => {
       try {
-        const [settingsRes, analyticsRes] = await Promise.all([
+        const [dashboardRes, settingsRes, analyticsRes] = await Promise.all([
+          fetch(`${API_URL}/api/dashboard`),
           fetch(`${API_URL}/api/settings`),
           fetch(`${API_URL}/api/analytics?days=30`)
         ])
+
+        if (dashboardRes.ok) {
+          setData(await dashboardRes.json())
+          setConnected(true)
+        } else {
+          setConnected(false)
+        }
 
         if (settingsRes.ok) setSettings(await settingsRes.json())
         if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
 
       } catch (err: any) {
         console.error('Fetch error:', err)
+        setConnected(false)
       } finally {
         setLoading(false)
       }
     }
+    
     fetchAll()
+    const interval = setInterval(fetchAll, 1000) // Update tiap 1 detik
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
