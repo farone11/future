@@ -40,10 +40,11 @@ interface DashboardData {
 }
 
 export default function Sidebar() {
-  const [data][setData] = useState<DashboardData | null>(null)
-  const [isCollapsed][setIsCollapsed] = useState(false)
-  const [isMobileOpen][setIsMobileOpen] = useState(false)
-  const [apiStatus][setApiStatus] = useState<'connecting' | 'live' | 'error'>('connecting')
+  // FIX 1: Pake koma, bukan ][
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [isMobileOpen, setIsMobileOpen] = useState(false)
+  const [apiStatus, setApiStatus] = useState<'connecting' | 'live' | 'error'>('connecting')
   const navigate = useNavigate()
   const location = useLocation()
   const intervalRef = useRef<NodeJS.Timeout>()
@@ -158,7 +159,7 @@ export default function Sidebar() {
               onClick={() => handleNavigate(item.path)}
               className={`flex items-center gap-3 p-3 rounded-lg mb-2 cursor-pointer transition-colors ${
                 location.pathname === item.path
-               ? 'bg-yellow-500/20 text-yellow-400'
+              ? 'bg-yellow-500/20 text-yellow-400'
                   : 'hover:bg-zinc-800 text-gray-400'
               }`}
             >
@@ -199,6 +200,7 @@ export default function Sidebar() {
               }`}>
                 {data?.ai_status || 'STANDBY'}
               </div>
+              {/* FIX 2: text- bukan text- */}
               <div className="text- text-gray-500">Source: {data?.data_source || 'NONE'}</div>
             </div>
 
@@ -210,6 +212,7 @@ export default function Sidebar() {
               <div className={`text-xs ${data?.daily_change >= 0? 'text-green-500' : 'text-red-500'}`}>
                 {data?.daily_change >= 0? '+' : ''}{data?.daily_change?.toFixed(2) || '0.00'} ({data?.daily_change_pct?.toFixed(2) || '0.00'}%)
               </div>
+              {/* FIX 2: text- bukan text- */}
               <div className="text- text-gray-500">Ask: ${data?.ask_price?.toFixed(2)} | Spread: {data?.spread?.toFixed(2)}</div>
             </div>
 
