@@ -1,572 +1,326 @@
-import { useEffect, useState, useRef } from "react";
+import { useState, useEffect } from "react";
  
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface CotData {
-  asOf: string;
-  netNonCommercial: number | null;
-  longPositions: number | null;
-  shortPositions: number | null;
-  managedMoneyLong: number | null;
-  managedMoneyShort: number | null;
-  commercialHedgers: number | null;
-  nonReportable: number | null;
-  history: { week: number; pct: number }[];
+interface COTData {
+  date: string;
+  netNonCommercial: number;
+  long: number;
+  short: number;
+  history: { week: string; pct: number }[];
+  managedMoneyLong: number;
+  managedMoneyShort: number;
+  commercialHedgers: number;
+  nonReportable: number;
 }
  
-interface SentimentData {
-  longPct: number | null;
-  shortPct: number | null;
+interface RetailSentiment {
+  longPct: number;
+  shortPct: number;
 }
  
-interface SmartMoneyData {
-  value: number | null;
-  signal: string | null;
-  updated: string | null;
+interface SmartMoneyIndex {
+  value: number;
+  label: string;
+  updatedAt: string;
 }
  
-interface FlowState {
-  cot: CotData;
-  sentiment: SentimentData;
-  smartMoney: SmartMoneyData;
-  isLive: boolean;
-  lastUpdate: string;
-}
- 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmt = (n: number | null, dec = 0) =>
-  n == null ? "---,---" : n.toLocaleString("en-US", { maximumFractionDigits: dec });
- 
-const pct = (n: number | null) => (n == null ? "--%": `${n.toFixed(1)}%`);
- 
-const signalColor = (signal: string | null) => {
-  if (!signal) return "#a0a0a0";
-  const s = signal.toLowerCase();
-  if (s.includes("bull") || s.includes("long") || s.includes("buy")) return "#22c55e";
-  if (s.includes("bear") || s.includes("short") || s.includes("sell")) return "#ef4444";
-  return "#f5c518";
+// ─── Mock / static data (replace with live WebSocket / MT5 feed) ───────────────
+const MOCK_COT: COTData = {
+  date: "11/06/26",
+  netNonCommercial: 245678,
+  long: 200704,
+  short: 46444,
+  history: [
+    { week: "Week -1", pct: 65 },
+    { week: "Week -2", pct: 57 },
+    { week: "Week -3", pct: 49 },
+    { week: "Week -4", pct: 41 },
+  ],
+  managedMoneyLong: 180234,
+  managedMoneyShort: 32100,
+  commercialHedgers: -198450,
+  nonReportable: 12890,
 };
  
-// ─── Sub-components ───────────────────────────────────────────────────────────
-function LiveBadge({ live }: { live: boolean }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          background: live ? "#22c55e" : "#ef4444",
-          display: "inline-block",
-          boxShadow: live ? "0 0 6px #22c55e" : "none",
-          animation: live ? "pulse 2s infinite" : "none",
-        }}
-      />
-      <span style={{ color: live ? "#22c55e" : "#ef4444", fontSize: 12, fontWeight: 600 }}>
-        {live ? "Live from MT5 + Tailscale" : "Disconnected"}
-      </span>
-    </div>
-  );
-}
+const MOCK_SENTIMENT: RetailSentiment = { longPct: 57, shortPct: 43 };
+ 
+const MOCK_SMI: SmartMoneyIndex = {
+  value: 70,
+  label: "BULLISH",
+  updatedAt: "2026-06-11 09:51:52",
+};
+ 
+// ─── Helper formatters ─────────────────────────────────────────────────────────
+const fmt = (n: number) =>
+  Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 3 });
+ 
+const signed = (n: number) => (n >= 0 ? `${fmt(n)}` : `-${fmt(n)}`);
+ 
+// ─── Sub-components ────────────────────────────────────────────────────────────
  
 function Card({
-  title,
-  subtitle,
-  accent = "#f5c518",
   children,
+  className = "",
 }: {
-  title: string;
-  subtitle?: string;
-  accent?: string;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
     <div
-      style={{
-        background: "#111418",
-        border: "1px solid #2a2d35",
-        borderRadius: 8,
-        padding: "20px 24px",
-        flex: 1,
-        minWidth: 0,
-        position: "relative",
-        overflow: "hidden",
-      }}
+      className={`rounded-xl bg-[#1a1d2e] border border-[#2a2d40] p-6 ${className}`}
     >
-      {/* accent top border */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 2,
-          background: `linear-gradient(90deg, ${accent}, transparent)`,
-        }}
-      />
-      <div style={{ marginBottom: 16 }}>
-        <h3 style={{ color: accent, fontSize: 13, fontWeight: 700, letterSpacing: 1, margin: 0, textTransform: "uppercase" }}>
-          {title}
-        </h3>
-        {subtitle && (
-          <p style={{ color: "#6b7280", fontSize: 11, margin: "4px 0 0", fontWeight: 400 }}>{subtitle}</p>
-        )}
-      </div>
       {children}
     </div>
   );
 }
  
-function CotBar({ week, pct: value }: { week: number; pct: number }) {
+function CardTitle({
+  children,
+  color = "text-yellow-400",
+}: {
+  children: React.ReactNode;
+  color?: string;
+}) {
+  return <h3 className={`text-sm font-semibold tracking-wide ${color}`}>{children}</h3>;
+}
+ 
+function CardSubtitle({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs text-gray-500 mt-0.5 mb-4">{children}</p>;
+}
+ 
+// Card 1 – CFTC COT Report
+function COTReportCard({ data }: { data: COTData }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        marginBottom: 10,
-      }}
-    >
-      <span style={{ color: "#6b7280", fontSize: 12, width: 56, flexShrink: 0 }}>
-        Week -{week}
-      </span>
-      <div
-        style={{
-          flex: 1,
-          background: "#1e2229",
-          borderRadius: 4,
-          height: 8,
-          overflow: "hidden",
-        }}
-      >
+    <Card>
+      <CardTitle>CFTC COT Report</CardTitle>
+      <CardSubtitle>As of {data.date}</CardSubtitle>
+ 
+      <div className="text-5xl font-bold text-yellow-400 tracking-tight">
+        {data.netNonCommercial.toLocaleString("en-US", { minimumFractionDigits: 3 })}
+      </div>
+      <p className="text-xs text-gray-500 mt-1 mb-4">Net Non-Commercial</p>
+ 
+      <div className="flex justify-between text-sm">
+        <span>
+          Long:{" "}
+          <span className="text-green-400 font-semibold">
+            {data.long.toLocaleString("en-US", { minimumFractionDigits: 3 })}
+          </span>
+        </span>
+        <span>
+          Short:{" "}
+          <span className="text-red-400 font-semibold">
+            {data.short.toLocaleString("en-US", { minimumFractionDigits: 3 })}
+          </span>
+        </span>
+      </div>
+    </Card>
+  );
+}
+ 
+// Card 2 – Retail Sentiment SWFX
+function RetailSentimentCard({ data }: { data: RetailSentiment }) {
+  return (
+    <Card>
+      <CardTitle color="text-yellow-400">Retail Sentiment SWFX</CardTitle>
+      <CardSubtitle>Live MT5</CardSubtitle>
+ 
+      <div className="flex items-center gap-8 mt-2">
+        <div>
+          <span className="text-5xl font-bold text-green-400">{data.longPct}%</span>
+          <p className="text-xs text-gray-500 mt-1">Long</p>
+        </div>
+        <div>
+          <span className="text-5xl font-bold text-red-400">{data.shortPct}%</span>
+          <p className="text-xs text-gray-500 mt-1">Short</p>
+        </div>
+      </div>
+ 
+      {/* Sentiment bar */}
+      <div className="mt-5 h-2 rounded-full bg-[#2a2d40] overflow-hidden">
         <div
-          style={{
-            width: `${value}%`,
-            height: "100%",
-            background: "linear-gradient(90deg, #f5c518, #d4a017)",
-            borderRadius: 4,
-            transition: "width 0.8s ease",
-          }}
+          className="h-full rounded-full bg-green-400 transition-all duration-700"
+          style={{ width: `${data.longPct}%` }}
         />
       </div>
-      <span style={{ color: "#e0e0e0", fontSize: 12, width: 32, textAlign: "right", flexShrink: 0 }}>
-        {value}%
-      </span>
-    </div>
+    </Card>
   );
 }
  
-function FlowSummaryRow({ label, value, color }: { label: string; value: string; color?: string }) {
+// Card 3 – Smart Money Index
+function SmartMoneyCard({ data }: { data: SmartMoneyIndex }) {
+  const isBullish = data.label === "BULLISH";
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "10px 0",
-        borderBottom: "1px solid #1e2229",
-      }}
-    >
-      <span style={{ color: "#9ca3af", fontSize: 13 }}>{label}</span>
-      <span style={{ color: color || "#e0e0e0", fontSize: 13, fontWeight: 600 }}>{value}</span>
-    </div>
+    <Card>
+      <CardTitle color="text-yellow-400">Smart Money Index</CardTitle>
+      <div className="mt-6 text-center">
+        <div className="text-7xl font-bold text-yellow-400">{data.value}</div>
+        <div
+          className={`text-lg font-bold mt-1 ${
+            isBullish ? "text-green-400" : "text-red-400"
+          }`}
+        >
+          {data.label}
+        </div>
+        <p className="text-xs text-gray-500 mt-3">Updated: {data.updatedAt}</p>
+      </div>
+    </Card>
   );
 }
  
-// ─── Mock / fallback data generator ──────────────────────────────────────────
-function getMockData(): FlowState {
-  return {
-    isLive: false,
-    lastUpdate: new Date().toLocaleTimeString(),
-    cot: {
-      asOf: "--/--/--",
-      netNonCommercial: null,
-      longPositions: null,
-      shortPositions: null,
-      managedMoneyLong: null,
-      managedMoneyShort: null,
-      commercialHedgers: null,
-      nonReportable: null,
-      history: [
-        { week: 1, pct: 65 },
-        { week: 2, pct: 57 },
-        { week: 3, pct: 49 },
-        { week: 4, pct: 41 },
-      ],
+// Card 4 – COT Positioning History
+function COTHistoryCard({ history }: { history: COTData["history"] }) {
+  return (
+    <Card>
+      <CardTitle color="text-yellow-400">COT Positioning History</CardTitle>
+      <div className="mt-4 space-y-3">
+        {history.map((row) => (
+          <div key={row.week} className="flex items-center gap-3">
+            <span className="text-xs text-gray-400 w-16 shrink-0">{row.week}</span>
+            <div className="flex-1 bg-[#2a2d40] rounded-full h-2 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-yellow-400 transition-all duration-700"
+                style={{ width: `${row.pct}%` }}
+              />
+            </div>
+            <span className="text-xs text-gray-300 w-8 text-right">{row.pct}%</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+ 
+// Card 5 – Flow Summary
+function FlowSummaryCard({ data }: { data: COTData }) {
+  const rows = [
+    {
+      label: "Institutional Net Position",
+      value: signed(data.netNonCommercial),
+      color: "text-white",
     },
-    sentiment: { longPct: null, shortPct: null },
-    smartMoney: { value: null, signal: null, updated: null },
-  };
+    {
+      label: "Managed Money Long",
+      value: fmt(data.managedMoneyLong),
+      color: "text-white",
+    },
+    {
+      label: "Managed Money Short",
+      value: fmt(data.managedMoneyShort),
+      color: "text-red-400",
+    },
+    {
+      label: "Commercial Hedgers",
+      value: `-${fmt(data.commercialHedgers)}`,
+      color: "text-red-400",
+    },
+    {
+      label: "Non-Reportable",
+      value: fmt(data.nonReportable),
+      color: "text-white",
+    },
+  ];
+ 
+  return (
+    <Card>
+      <CardTitle color="text-yellow-400">Flow Summary</CardTitle>
+      <div className="mt-4 space-y-3">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between text-sm border-b border-[#2a2d40] pb-2 last:border-0">
+            <span className="text-gray-400">{row.label}</span>
+            <span className={`font-semibold ${row.color}`}>{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
 }
  
-// ─── Live data fetcher (connects to MT5 backend via /api/institutional-flow) ──
-async function fetchLiveData(): Promise<Partial<FlowState>> {
-  try {
-    const res = await fetch("/api/institutional-flow", {
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) throw new Error("non-200");
-    const json = await res.json();
-    return { ...json, isLive: true, lastUpdate: new Date().toLocaleTimeString() };
-  } catch {
-    return {};
-  }
-}
- 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function InstitutionalFlow() {
-  const [state, setState] = useState<FlowState>(getMockData());
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [cot, setCot] = useState<COTData>(MOCK_COT);
+  const [sentiment, setSentiment] = useState<RetailSentiment>(MOCK_SENTIMENT);
+  const [smi, setSmi] = useState<SmartMoneyIndex>(MOCK_SMI);
+  const [livePrice, setLivePrice] = useState<number>(4092.8);
+  const [isLive] = useState(true);
  
-  const refresh = async () => {
-    const live = await fetchLiveData();
-    if (live && live.isLive) {
-      setState((prev) => ({ ...prev, ...live }));
-    }
-  };
- 
+  // Simulate live price tick (replace with real WebSocket)
   useEffect(() => {
-    refresh();
-    intervalRef.current = setInterval(refresh, 30_000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    const id = setInterval(() => {
+      setLivePrice((p) => +(p + (Math.random() - 0.5) * 0.5).toFixed(2));
+    }, 3000);
+    return () => clearInterval(id);
   }, []);
  
-  const { cot, sentiment, smartMoney, isLive } = state;
- 
-  // ── Derived net non-commercial display ────────────────────────────────────
-  const netDisplay =
-    cot.netNonCommercial == null
-      ? "---,---"
-      : cot.netNonCommercial > 0
-      ? `+${fmt(cot.netNonCommercial)}`
-      : fmt(cot.netNonCommercial);
- 
-  const institutionalNetPos =
-    cot.managedMoneyLong != null && cot.managedMoneyShort != null
-      ? `${fmt(cot.managedMoneyLong - cot.managedMoneyShort)}`
-      : "---";
- 
   return (
-    <div
-      style={{
-        background: "#0c0e12",
-        minHeight: "100vh",
-        padding: "28px 24px",
-        fontFamily: "'Inter', 'Segoe UI', sans-serif",
-        color: "#e0e0e0",
-      }}
-    >
-      {/* ── Keyframe for pulse ─────────────────────────────────────────────── */}
-      <style>{`
-        @keyframes pulse {
-          0%,100%{opacity:1}50%{opacity:.4}
-        }
-        @keyframes fadeIn {
-          from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}
-        }
-        .if-row{animation:fadeIn .4s ease both}
-      `}</style>
- 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-          <h1
-            style={{
-              fontSize: 22,
-              fontWeight: 800,
-              letterSpacing: 1.5,
-              margin: 0,
-              color: "#ffffff",
-              textTransform: "uppercase",
-            }}
-          >
+    <div className="min-h-screen bg-[#0a0b14] text-white flex flex-col">
+      {/* Main content */}
+      <div className="flex-1 p-6">
+        {/* Header */}
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold tracking-tight">
             Institutional Flow Analysis
           </h1>
-        </div>
-        <div style={{ marginTop: 6 }}>
-          <LiveBadge live={isLive} />
-        </div>
-      </div>
- 
-      {/* ── Top Row: CFTC COT | Retail Sentiment | Smart Money ─────────────── */}
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          marginBottom: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        {/* CFTC COT Report */}
-        <Card title="CFTC COT Report" subtitle={`As of ${cot.asOf}`} accent="#f5c518">
-          <div
-            style={{
-              textAlign: "center",
-              padding: "12px 0 16px",
-            }}
-          >
+          <div className="flex items-center gap-2 mt-1 text-sm text-gray-400">
             <span
-              style={{
-                fontSize: 32,
-                fontWeight: 800,
-                color: cot.netNonCommercial == null ? "#6b7280" : cot.netNonCommercial >= 0 ? "#f5c518" : "#ef4444",
-                letterSpacing: 2,
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {cot.netNonCommercial == null ? "---,---" : netDisplay}
-            </span>
-            <p style={{ color: "#6b7280", fontSize: 12, margin: "6px 0 0" }}>Net Non-Commercial</p>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              marginTop: 8,
-              paddingTop: 12,
-              borderTop: "1px solid #1e2229",
-            }}
-          >
-            <span style={{ color: "#22c55e", fontSize: 13, fontWeight: 600 }}>
-              Long: {fmt(cot.longPositions)}
-            </span>
-            <span style={{ color: "#ef4444", fontSize: 13, fontWeight: 600 }}>
-              Short: {fmt(cot.shortPositions)}
+              className={`inline-block w-2 h-2 rounded-full ${
+                isLive ? "bg-green-400 animate-pulse" : "bg-gray-500"
+              }`}
+            />
+            <span>
+              {isLive ? "Live from MT5 + Tailscale" : "Disconnected"} |{" "}
+              <span className="text-white font-semibold">${livePrice.toFixed(2)}</span>
             </span>
           </div>
-        </Card>
- 
-        {/* Retail Sentiment SWFX */}
-        <Card title="Retail Sentiment SWFX" subtitle="Live MT5" accent="#22c55e">
-          <div style={{ textAlign: "center", padding: "8px 0 12px" }}>
-            <div style={{ display: "flex", justifyContent: "center", gap: 32, marginBottom: 14 }}>
-              <div>
-                <div
-                  style={{
-                    fontSize: 28,
-                    fontWeight: 800,
-                    color: "#22c55e",
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                >
-                  {pct(sentiment.longPct)}
-                </div>
-                <div style={{ color: "#6b7280", fontSize: 12, marginTop: 2 }}>Long</div>
-              </div>
-              <div>
-                <div
-                  style={{
-                    fontSize: 28,
-                    fontWeight: 800,
-                    color: "#ef4444",
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                >
-                  {pct(sentiment.shortPct)}
-                </div>
-                <div style={{ color: "#6b7280", fontSize: 12, marginTop: 2 }}>Short</div>
-              </div>
-            </div>
- 
-            {/* Sentiment Bar */}
-            <div
-              style={{
-                background: "#1e2229",
-                borderRadius: 6,
-                height: 10,
-                overflow: "hidden",
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: sentiment.longPct != null ? `${sentiment.longPct}%` : "50%",
-                  background: "linear-gradient(90deg, #22c55e, #16a34a)",
-                  borderRadius: 6,
-                  transition: "width 0.8s ease",
-                }}
-              />
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-              <span style={{ color: "#22c55e", fontSize: 10 }}>LONG</span>
-              <span style={{ color: "#ef4444", fontSize: 10 }}>SHORT</span>
-            </div>
-          </div>
-        </Card>
- 
-        {/* Smart Money Index */}
-        <Card title="Smart Money Index" accent="#a78bfa">
-          <div style={{ textAlign: "center", padding: "12px 0 8px" }}>
-            <div
-              style={{
-                fontSize: 36,
-                fontWeight: 900,
-                color:
-                  smartMoney.value == null
-                    ? "#f5c518"
-                    : signalColor(smartMoney.signal),
-                letterSpacing: 1,
-                marginBottom: 6,
-              }}
-            >
-              {smartMoney.value == null ? "undefined" : fmt(smartMoney.value, 2)}
-            </div>
-            <div
-              style={{
-                color: signalColor(smartMoney.signal),
-                fontSize: 14,
-                fontWeight: 700,
-                marginBottom: 8,
-                textTransform: "uppercase",
-                letterSpacing: 1,
-              }}
-            >
-              {smartMoney.signal ?? "undefined"}
-            </div>
-            <div style={{ color: "#6b7280", fontSize: 11 }}>
-              Updated: {smartMoney.updated ?? "undefined"}
-            </div>
-          </div>
-        </Card>
-      </div>
- 
-      {/* ── Bottom Row: COT History | Flow Summary ──────────────────────────── */}
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        {/* COT Positioning History */}
-        <div style={{ flex: "1 1 380px", minWidth: 300 }}>
-          <Card title="COT Positioning History" accent="#f5c518">
-            <div style={{ marginTop: 4 }}>
-              {cot.history.map((h) => (
-                <CotBar key={h.week} week={h.week} pct={h.pct} />
-              ))}
-              {cot.history.length === 0 && (
-                <p style={{ color: "#6b7280", fontSize: 13, textAlign: "center", marginTop: 16 }}>
-                  No data available
-                </p>
-              )}
-            </div>
-          </Card>
         </div>
  
-        {/* Flow Summary */}
-        <div style={{ flex: "1 1 380px", minWidth: 300 }}>
-          <Card title="Flow Summary" accent="#f5c518">
-            <div>
-              <FlowSummaryRow
-                label="Institutional Net Position"
-                value={institutionalNetPos}
-                color={
-                  cot.managedMoneyLong != null && cot.managedMoneyShort != null
-                    ? cot.managedMoneyLong > cot.managedMoneyShort
-                      ? "#22c55e"
-                      : "#ef4444"
-                    : "#6b7280"
-                }
-              />
-              <FlowSummaryRow
-                label="Managed Money Long"
-                value={fmt(cot.managedMoneyLong)}
-                color="#22c55e"
-              />
-              <FlowSummaryRow
-                label="Managed Money Short"
-                value={fmt(cot.managedMoneyShort)}
-                color="#ef4444"
-              />
-              <FlowSummaryRow
-                label="Commercial Hedgers"
-                value={fmt(cot.commercialHedgers)}
-                color="#a78bfa"
-              />
-              <FlowSummaryRow
-                label="Non-Reportable"
-                value={fmt(cot.nonReportable)}
-              />
-            </div>
+        {/* Top row: 3 cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <COTReportCard data={cot} />
+          <RetailSentimentCard data={sentiment} />
+          <SmartMoneyCard data={smi} />
+        </div>
  
-            {/* Last update footer */}
-            <div
-              style={{
-                marginTop: 16,
-                paddingTop: 12,
-                borderTop: "1px solid #1e2229",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <span style={{ color: "#4b5563", fontSize: 11 }}>
-                Auto-refresh every 30s
-              </span>
-              <span style={{ color: "#4b5563", fontSize: 11 }}>
-                Last: {state.lastUpdate}
-              </span>
-            </div>
-          </Card>
+        {/* Bottom row: 2 cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <COTHistoryCard history={cot.history} />
+          <FlowSummaryCard data={cot} />
         </div>
       </div>
  
-      {/* ── Footer ─────────────────────────────────────────────────────────── */}
-      <div
-        style={{
-          marginTop: 40,
-          borderTop: "1px solid #1e2229",
-          paddingTop: 14,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-end",
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        {/* Left: Risk Warning + Copyright */}
-        <div>
-          <p
-            style={{
-              color: "#6b7280",
-              fontSize: 10,
-              margin: "0 0 4px",
-              maxWidth: 600,
-              lineHeight: 1.6,
-            }}
-          >
-            <span style={{ color: "#9ca3af", fontWeight: 600 }}>Risk Warning: </span>
-            Trading foreign exchange on margin carries a high level of risk.
-          </p>
-          <p style={{ color: "#4b5563", fontSize: 10, margin: 0 }}>
-            © 2026 FARONE.AI — Powered by MetaTrader 5 | Contact: admin@faronecapital.online
-          </p>
-        </div>
+      {/* Footer */}
+      <footer className="mt-8 border-t border-[#1e2130] px-6 py-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 text-xs text-gray-500">
+          {/* Left: risk warning + copyright */}
+          <div className="space-y-1">
+            <p>
+              <span className="text-red-400 font-semibold">Risk Warning:</span>{" "}
+              Trading foreign exchange on margin carries a high level of risk and may not be suitable for all investors.
+            </p>
+            <p>
+              © 2026 FARONE.AI — Powered by MetaTrader 5 |{" "}
+              <a
+                href="mailto:farone2013@gmail.com"
+                className="text-gray-400 hover:text-yellow-400 transition-colors"
+              >
+                farone2013@gmail.com
+              </a>{" "}
+              for licensing
+            </p>
+          </div>
  
-        {/* Right: Authors */}
-        <div style={{ textAlign: "right" }}>
-          <p style={{ color: "#4b5563", fontSize: 10, margin: "0 0 2px", letterSpacing: 0.5 }}>
-            Authors
-          </p>
-          <p
-            style={{
-              color: "#9ca3af",
-              fontSize: 11,
-              margin: 0,
-              fontWeight: 600,
-              letterSpacing: 0.5,
-            }}
-          >
-            Setiawan F | Selviana R
-          </p>
+          {/* Right: authors */}
+          <div className="text-right">
+            <p className="text-gray-600 mb-0.5">Authors</p>
+            <p>
+              <span className="text-yellow-400 font-semibold">Setiawan F</span>
+              {" | "}
+              <span className="text-yellow-400 font-semibold">Selviana R</span>
+            </p>
+            <p className="text-gray-600">Founder @ Aitopia</p>
+          </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
 }
