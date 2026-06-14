@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Signal, History, Settings, ChevronLeft, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Signal, History, Settings, ChevronLeft, Menu, X, Activity, Droplets, BarChart3 } from 'lucide-react'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:5400/ws/live'
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
+const DASHBOARD_URL = `${API_URL}/api/dashboard`
 
 interface DashboardData {
   ai_status: string
   gold_price: number
+  ask_price: number
   daily_change: number
+  daily_change_pct: number
   win_rate: number
   total_trades: number
+  data_source: string
+  spread: number
   active_signal: {
     status: 'BUY' | 'SELL' | 'NONE'
     entry: number
@@ -23,7 +28,13 @@ interface DashboardData {
   risk_engine: {
     lot_size: number
     drawdown: number
+    max_daily_dd: number
     status: string
+    balance: number
+    equity: number
+    margin: number
+    free_margin: number
+    kill_switch: boolean
   }
 }
 
@@ -31,10 +42,12 @@ export default function Sidebar() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [isMobileOpen, setIsMobileOpen] = useState(false)
+  const [apiStatus, setApiStatus] = useState<'connecting' | 'live' | 'error'>('connecting')
   const navigate = useNavigate()
   const location = useLocation()
+  const intervalRef = useRef<NodeJS.Timeout>()
+  const abortRef = useRef<AbortController>()
 
-  // AUTO COLLAPSE DI < 1024px, EXPAND DI DESKTOP
   useEffect(() => {
     const checkScreen = () => {
       if (window.innerWidth < 1024) {
@@ -50,21 +63,41 @@ export default function Sidebar() {
     return () => window.removeEventListener('resize', checkScreen)
   }, [])
 
-  // WEBSOCKET REALTIME
   useEffect(() => {
-    const ws = new WebSocket(WS_URL)
-    ws.onmessage = (event) => {
+    const fetchData = async () => {
+      abortRef.current?.abort()
+      abortRef.current = new AbortController()
+      
       try {
-        const liveData = JSON.parse(event.data)
-        setData(prev => ({...prev,...liveData }))
-      } catch (e) {}
+        const res = await fetch(DASHBOARD_URL, { 
+          signal: abortRef.current.signal,
+          cache: 'no-store' 
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const liveData = await res.json()
+        setData(liveData)
+        setApiStatus('live')
+      } catch (e: any) {
+        if (e.name === 'AbortError') return
+        console.error('❌ Sidebar API Error:', e)
+        setApiStatus('error')
+      }
     }
-    return () => ws.close()
+
+    setApiStatus('connecting')
+    fetchData()
+    intervalRef.current = setInterval(fetchData, 2000) // ganti 2 detik, 1 detik kebanyakan
+
+    return () => {
+      abortRef.current?.abort()
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
   }, [])
 
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: Signal, label: 'Signals', path: '/signals' },
+    { icon: Droplets, label: 'Liquidity Zones', path: '/liquidity-zones' }, // <-- TAMBAH INI
     { icon: History, label: 'History', path: '/history' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ]
@@ -76,7 +109,6 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* TOMBOL HAMBURGER MOBILE */}
       <button
         onClick={() => setIsMobileOpen(!isMobileOpen)}
         className="lg:hidden fixed top-4 left-4 z-[60] p-2 bg-zinc-900 rounded-lg border border-zinc-800 text-white"
@@ -84,7 +116,6 @@ export default function Sidebar() {
         {isMobileOpen? <X size={20} /> : <Menu size={20} />}
       </button>
 
-      {/* OVERLAY MOBILE */}
       {isMobileOpen && (
         <div
           className="lg:hidden fixed inset-0 bg-black/60 z-[55]"
@@ -92,7 +123,6 @@ export default function Sidebar() {
         />
       )}
 
-      {/* SIDEBAR */}
       <aside className={`
         fixed lg:static top-0 left-0 h-screen bg-zinc-900 border-r border-zinc-800
         transition-all duration-300 z-[56] flex flex-col font-sans
@@ -100,19 +130,18 @@ export default function Sidebar() {
         ${isMobileOpen? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
 
-        {/* HEADER */}
         <div className="flex items-center justify-between p-4 h-16 border-b border-zinc-800 flex-shrink-0">
           {!isCollapsed && (
             <div className="flex items-center gap-2">
               <img 
-                src="/logo.png" 
-                alt="FARONE.AI" 
-                className="w-8 h-8 object-contain" 
+                src="/Logo.png" 
+                alt="Futuristic Gold" 
+                className="w-8 h-8 object-contain rounded" 
                 onError={(e) => e.currentTarget.style.display = 'none'} 
               />
               <div>
-                <div className="font-bold text-sm text-white">FARONE.AI</div>
-                <div className="text-xs text-gray-500">SMC ENGINE</div>
+                <div className="font-bold text-sm text-white leading-tight">FUTURISTIC</div>
+                <div className="text-xs text-yellow-500">GOLD AI</div>
               </div>
             </div>
           )}
@@ -124,7 +153,6 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {/* MENU */}
         <nav className="p-4 flex-shrink-0">
           {menuItems.map((item) => (
             <div
@@ -132,7 +160,7 @@ export default function Sidebar() {
               onClick={() => handleNavigate(item.path)}
               className={`flex items-center gap-3 p-3 rounded-lg mb-2 cursor-pointer transition-colors ${
                 location.pathname === item.path
-                ? 'bg-yellow-500/20 text-yellow-400'
+             ? 'bg-yellow-500/20 text-yellow-400'
                   : 'hover:bg-zinc-800 text-gray-400'
               }`}
             >
@@ -142,12 +170,28 @@ export default function Sidebar() {
           ))}
         </nav>
 
-        {/* DATA - HILANG KALO COLLAPSE */}
         {!isCollapsed && (
           <div className="p-4 text-xs space-y-3 border-t border-zinc-800 overflow-y-auto flex-1">
+            
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-500">Connection</span>
+              <div className="flex items-center gap-1">
+                <div className={`w-2 h-2 rounded-full ${
+                  apiStatus === 'live'? 'bg-green-500 animate-pulse' : 
+                  apiStatus === 'connecting'? 'bg-yellow-500' : 'bg-red-500'
+                }`} />
+                <span className={
+                  apiStatus === 'live'? 'text-green-400' : 
+                  apiStatus === 'connecting'? 'text-yellow-400' : 'text-red-400'
+                }>
+                  {apiStatus.toUpperCase()}
+                </span>
+              </div>
+            </div>
+
             <div>
               <div className="text-gray-500 flex items-center gap-1 text-xs">
-                <Signal size={12} /> AI SIGNAL CENTER
+                <Activity size={12} /> AI SIGNAL CENTER
               </div>
               <div className={`text-lg font-bold ${
                 data?.ai_status === 'ACTIVE'? 'text-green-400' :
@@ -155,6 +199,7 @@ export default function Sidebar() {
               }`}>
                 {data?.ai_status || 'STANDBY'}
               </div>
+              <div className="text-xs text-gray-500">Source: {data?.data_source || 'NONE'}</div>
             </div>
 
             <div>
@@ -163,8 +208,9 @@ export default function Sidebar() {
                 ${data?.gold_price?.toFixed(2) || '0.00'}
               </div>
               <div className={`text-xs ${data?.daily_change >= 0? 'text-green-500' : 'text-red-500'}`}>
-                {data?.daily_change >= 0? '+' : ''}{data?.daily_change?.toFixed(2) || '0.00'}
+                {data?.daily_change >= 0? '+' : ''}{data?.daily_change?.toFixed(2) || '0.00'} ({data?.daily_change_pct?.toFixed(2) || '0.00'}%)
               </div>
+              <div className="text-xs text-gray-500">Ask: ${data?.ask_price?.toFixed(2)} | Spread: {data?.spread?.toFixed(2)}</div>
             </div>
 
             <div>
@@ -194,6 +240,8 @@ export default function Sidebar() {
             <div>
               <div className="text-gray-500 text-xs">⚠ RISK ENGINE</div>
               <div className="space-y-0.5 text-xs">
+                <div className="flex justify-between">Balance: <span>${data?.risk_engine?.balance?.toFixed(2) || '0.00'}</span></div>
+                <div className="flex justify-between">Equity: <span>${data?.risk_engine?.equity?.toFixed(2) || '0.00'}</span></div>
                 <div className="flex justify-between">Lot: <span>{data?.risk_engine?.lot_size?.toFixed(2) || '0.00'}</span></div>
                 <div className="flex justify-between">DD: <span>{data?.risk_engine?.drawdown?.toFixed(1) || '0'}%</span></div>
                 <div className={`font-medium ${

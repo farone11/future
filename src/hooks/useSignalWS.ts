@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:5400/ws/signals'
+const API_URL = 'https://api.faronecapital.online'
 
 export interface Signal {
-  id: number
-  type: 'BUY' | 'SELL'
+  id: number | string
+  type: 'BUY' | 'SELL' | 'NONE'
   entry?: number
   sl?: number
   tp?: number
@@ -18,85 +18,132 @@ export interface Signal {
   pnl?: number
 }
 
+export interface ActiveSignal {
+  id?: number | string
+  status?: 'BUY' | 'SELL' | 'NONE'
+  entry?: number
+  sl?: number
+  tp?: number
+  tp1?: number
+  tp2?: number
+  rr?: number
+  confidence?: number
+  source?: string
+  time?: string
+}
+
+export interface LiveData {
+  ai_status: string
+  gold_price: number
+  ask_price: number
+  spread: number
+  symbol: string
+  balance: number
+  equity: number
+  updated_at: string
+  updated_date: string
+  active_signal: ActiveSignal | null
+  win_rate: number
+  total_trades: number
+  open_positions: number
+  data_source: string
+  risk_engine?: any
+}
+
 export const useSignalWS = () => {
   const [signals, setSignals] = useState<Signal[]>([])
+  const [liveData, setLiveData] = useState<LiveData | null>(null)
   const [connected, setConnected] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<string>('-')
-  
-  const ws = useRef<WebSocket | null>(null)
-  const reconnectTimer = useRef<NodeJS.Timeout>()
-  const heartbeatTimer = useRef<NodeJS.Timeout>()
-  const retryCount = useRef(0)
+  const failCount = useRef(0)
+  const isMounted = useRef(true)
 
-  const connectWS = useCallback(() => {
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-    if (heartbeatTimer.current) clearInterval(heartbeatTimer.current)
-    if (ws.current?.readyState === WebSocket.OPEN) return
+  useEffect(() => {
+    isMounted.current = true
+    const controller = new AbortController()
 
-    ws.current = new WebSocket(WS_URL)
-    
-    ws.current.onopen = () => {
-      console.log('[WS] Connected to signals')
-      setConnected(true)
-      retryCount.current = 0
-      
-      heartbeatTimer.current = setInterval(() => {
-        if (ws.current?.readyState === WebSocket.OPEN) {
-          ws.current.send('ping')
-        }
-      }, 25000)
-    }
-    
-    ws.current.onmessage = (event) => {
+    const fetchSignals = async () => {
       try {
-        const msg = JSON.parse(event.data)
-        
-        if (msg.type === 'init') {
-          setSignals(msg.signals || [])
-          setLastUpdate(new Date().toLocaleTimeString())
+        const res = await fetch(`${API_URL}/api/dashboard`, {
+          cache: 'no-store',
+          signal: controller.signal
+        })
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        const data: LiveData = await res.json()
+        if (!isMounted.current) return
+
+        if (!data.gold_price) {
+          failCount.current += 1
+          if (failCount.current >= 3) setConnected(false)
+          return
         }
-        if (msg.type === 'signal_update') {
-          setSignals(prev => {
-            const exists = prev.find(s => s.id === msg.data.id)
-            if (exists) {
-              return prev.map(s => s.id === msg.data.id? msg.data : s)
-            }
-            return [msg.data,...prev]
-          })
-          setLastUpdate(new Date().toLocaleTimeString())
+
+        failCount.current = 0
+        setLiveData(data)
+        setConnected(true)
+        setLastUpdate(new Date().toLocaleTimeString('id-ID'))
+
+        const active = data.active_signal
+
+        // Kalau ga ada signal valid, kosongin array biar UI ga nampilin dummy
+        if (!active || active.status === 'NONE' ||!active.entry || active.entry === 0) {
+          setSignals([])
+          return
         }
-        if (msg.type === 'heartbeat' || msg.type === 'pong') {
-          setLastUpdate(new Date().toLocaleTimeString())
+
+        const newSignal: Signal = {
+          id: active.id?? Date.now(),
+          type: active.status?? 'NONE',
+          entry: active.entry?? 0,
+          sl: active.sl?? 0,
+          tp: active.tp1?? active.tp?? 0,
+          tp1: active.tp1?? 0,
+          tp2: active.tp2?? 0,
+          rr: active.rr?? 0,
+          status: active.status?? data.ai_status?? 'STANDBY',
+          time: active.time?? data.updated_at?? new Date().toLocaleTimeString('id-ID'),
+          source: active.source?? 'XAUUSD',
+          confidence: active.confidence?? 0,
+          pnl: (data.equity?? 0) - (data.balance?? 0)
         }
-      } catch (e) {
-        console.error('[WS] Parse error:', e)
+
+        // Cuma update kalau data bener-bener berubah
+        setSignals(prev => {
+          const prevSignal = prev[0]
+          const isSame = 
+            prevSignal?.id === newSignal.id &&
+            prevSignal?.entry === newSignal.entry &&
+            prevSignal?.sl === newSignal.sl &&
+            prevSignal?.tp1 === newSignal.tp1
+          return isSame? prev : [newSignal]
+        })
+
+      } catch (err: any) {
+        if (err.name === 'AbortError') return
+        console.error('[LiveData] Fetch Error:', err)
+        failCount.current += 1
+        if (isMounted.current && failCount.current >= 3) {
+          setConnected(false)
+        }
       }
     }
-    
-    ws.current.onerror = (e) => {
-      console.error('[WS] Error:', e)
-      setConnected(false)
-    }
-    
-    ws.current.onclose = (e) => {
-      console.log(`[WS] Closed. Code: ${e.code}. Retry in ${Math.min(1000 * retryCount.current, 10000)/1000}s`)
-      setConnected(false)
-      
-      retryCount.current++
-      const delay = Math.min(1000 * Math.pow(2, retryCount.current), 10000)
-      reconnectTimer.current = setTimeout(connectWS, delay)
+
+    fetchSignals()
+    const interval = setInterval(fetchSignals, 2000)
+
+    return () => {
+      isMounted.current = false
+      controller.abort()
+      clearInterval(interval)
     }
   }, [])
 
-  useEffect(() => {
-    connectWS()
-    
-    return () => {
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      if (heartbeatTimer.current) clearInterval(heartbeatTimer.current)
-      ws.current?.close()
-    }
-  }, [connectWS])
-
-  return { signals, connected, lastUpdate }
+  return {
+    signals,
+    liveData,
+    connected,
+    lastUpdate
+  }
 }

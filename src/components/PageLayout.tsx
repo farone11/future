@@ -69,7 +69,7 @@ export default function PageLayout({
         <footer className="border-t border-[#1e1e24] px-4 lg:px-6 py-3 flex flex-col lg:flex-row items-start lg:items-center justify-between text-xs text-gray-600 gap-3">
           <div>
             <span className="text-red-400 font-semibold">Risk Warning:</span> Trading foreign exchange on margin carries a high level of risk.
-            <br />© 2026 FARONE.AI — Powered by MetaTrader 5 | Contact: farone2013@gmail.com
+            <br />© 2026 FARONE.AI — Powered by MetaTrader 5 | Contact: admin@faronecapital.online
           </div>
           <div className="text-left lg:text-right shrink-0">
             <div className="text-gray-500 mb-1">Authors</div>
