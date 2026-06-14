@@ -29,19 +29,26 @@ interface DashboardData {
 export default function LiquidityZones() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const res = await fetch('/api/dashboard'); // PAKAI RELATIVE PATH - PROXY VITE YG HANDLE
+        // UPGRADE: Pake VITE_API_URL biar jalan di Cloudflare Production
+        const API_URL = import.meta.env.VITE_API_URL || '';
+        const res = await fetch(`${API_URL}/api/dashboard`);
+
         if (res.ok) {
           const json = await res.json();
-          console.log('API Response:', json); // DEBUG: cek muncul ga di console
+          console.log('API Response:', json);
           setData(json);
+          setError(null);
         } else {
+          setError(`API Error: ${res.status}`);
           console.error('API Error:', res.status);
         }
       } catch (err) {
+        setError('Failed to connect to API');
         console.error('Failed fetch liquidity:', err);
       } finally {
         setLoading(false);
@@ -65,6 +72,12 @@ export default function LiquidityZones() {
       title="Liquidity Zones - XAUUSD H1"
       subtitle="Buy-Side & Sell-Side Liquidity + Session Levels · Auto Sweep Detection"
     >
+      {error && (
+        <div className="mb-4 bg-red-900/20 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {error} - Check API connection
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
         <Card>
