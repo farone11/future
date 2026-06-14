@@ -1,8 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Signal, History, Settings, ChevronLeft, Menu, X, Activity } from 'lucide-react'
+import { LayoutDashboard, Signal, History, Settings, ChevronLeft, Menu, X, Activity, Droplets, BarChart3 } from 'lucide-react'
 
-// FIX: Pake REST API, bukan WS
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 const DASHBOARD_URL = `${API_URL}/api/dashboard`
 
@@ -40,7 +39,6 @@ interface DashboardData {
 }
 
 export default function Sidebar() {
-  // FIX 1: Pake koma, bukan ][
   const [data, setData] = useState<DashboardData | null>(null)
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [isMobileOpen, setIsMobileOpen] = useState(false)
@@ -48,8 +46,8 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const intervalRef = useRef<NodeJS.Timeout>()
+  const abortRef = useRef<AbortController>()
 
-  // AUTO COLLAPSE DI < 1024px, EXPAND DI DESKTOP
   useEffect(() => {
     const checkScreen = () => {
       if (window.innerWidth < 1024) {
@@ -65,26 +63,33 @@ export default function Sidebar() {
     return () => window.removeEventListener('resize', checkScreen)
   }, [])
 
-  // GANTI TOTAL: POLLING REST API TIAP 1 DETIK, BUKAN WS
   useEffect(() => {
     const fetchData = async () => {
+      abortRef.current?.abort()
+      abortRef.current = new AbortController()
+      
       try {
-        const res = await fetch(DASHBOARD_URL)
+        const res = await fetch(DASHBOARD_URL, { 
+          signal: abortRef.current.signal,
+          cache: 'no-store' 
+        })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const liveData = await res.json()
         setData(liveData)
         setApiStatus('live')
-      } catch (e) {
+      } catch (e: any) {
+        if (e.name === 'AbortError') return
         console.error('❌ Sidebar API Error:', e)
         setApiStatus('error')
       }
     }
 
     setApiStatus('connecting')
-    fetchData() // fetch pertama
-    intervalRef.current = setInterval(fetchData, 1000) // update tiap 1 detik
+    fetchData()
+    intervalRef.current = setInterval(fetchData, 2000) // ganti 2 detik, 1 detik kebanyakan
 
     return () => {
+      abortRef.current?.abort()
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
   }, [])
@@ -92,6 +97,7 @@ export default function Sidebar() {
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: Signal, label: 'Signals', path: '/signals' },
+    { icon: Droplets, label: 'Liquidity Zones', path: '/liquidity-zones' }, // <-- TAMBAH INI
     { icon: History, label: 'History', path: '/history' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ]
@@ -103,7 +109,6 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* TOMBOL HAMBURGER MOBILE */}
       <button
         onClick={() => setIsMobileOpen(!isMobileOpen)}
         className="lg:hidden fixed top-4 left-4 z-[60] p-2 bg-zinc-900 rounded-lg border border-zinc-800 text-white"
@@ -111,7 +116,6 @@ export default function Sidebar() {
         {isMobileOpen? <X size={20} /> : <Menu size={20} />}
       </button>
 
-      {/* OVERLAY MOBILE */}
       {isMobileOpen && (
         <div
           className="lg:hidden fixed inset-0 bg-black/60 z-[55]"
@@ -119,7 +123,6 @@ export default function Sidebar() {
         />
       )}
 
-      {/* SIDEBAR */}
       <aside className={`
         fixed lg:static top-0 left-0 h-screen bg-zinc-900 border-r border-zinc-800
         transition-all duration-300 z-[56] flex flex-col font-sans
@@ -127,7 +130,6 @@ export default function Sidebar() {
         ${isMobileOpen? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
 
-        {/* HEADER - REBRAND */}
         <div className="flex items-center justify-between p-4 h-16 border-b border-zinc-800 flex-shrink-0">
           {!isCollapsed && (
             <div className="flex items-center gap-2">
@@ -151,7 +153,6 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {/* MENU */}
         <nav className="p-4 flex-shrink-0">
           {menuItems.map((item) => (
             <div
@@ -159,7 +160,7 @@ export default function Sidebar() {
               onClick={() => handleNavigate(item.path)}
               className={`flex items-center gap-3 p-3 rounded-lg mb-2 cursor-pointer transition-colors ${
                 location.pathname === item.path
-              ? 'bg-yellow-500/20 text-yellow-400'
+             ? 'bg-yellow-500/20 text-yellow-400'
                   : 'hover:bg-zinc-800 text-gray-400'
               }`}
             >
@@ -169,11 +170,9 @@ export default function Sidebar() {
           ))}
         </nav>
 
-        {/* DATA - HILANG KALO COLLAPSE */}
         {!isCollapsed && (
           <div className="p-4 text-xs space-y-3 border-t border-zinc-800 overflow-y-auto flex-1">
             
-            {/* API STATUS INDICATOR */}
             <div className="flex items-center justify-between text-xs">
               <span className="text-gray-500">Connection</span>
               <div className="flex items-center gap-1">
@@ -200,8 +199,7 @@ export default function Sidebar() {
               }`}>
                 {data?.ai_status || 'STANDBY'}
               </div>
-              {/* FIX 2: text- bukan text- */}
-              <div className="text- text-gray-500">Source: {data?.data_source || 'NONE'}</div>
+              <div className="text-xs text-gray-500">Source: {data?.data_source || 'NONE'}</div>
             </div>
 
             <div>
@@ -212,8 +210,7 @@ export default function Sidebar() {
               <div className={`text-xs ${data?.daily_change >= 0? 'text-green-500' : 'text-red-500'}`}>
                 {data?.daily_change >= 0? '+' : ''}{data?.daily_change?.toFixed(2) || '0.00'} ({data?.daily_change_pct?.toFixed(2) || '0.00'}%)
               </div>
-              {/* FIX 2: text- bukan text- */}
-              <div className="text- text-gray-500">Ask: ${data?.ask_price?.toFixed(2)} | Spread: {data?.spread?.toFixed(2)}</div>
+              <div className="text-xs text-gray-500">Ask: ${data?.ask_price?.toFixed(2)} | Spread: {data?.spread?.toFixed(2)}</div>
             </div>
 
             <div>
