@@ -9,6 +9,7 @@ const Signals = lazy(() => import('./pages/Signals'))
 const History = lazy(() => import('./pages/History'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Analytics = lazy(() => import('./pages/Analytics'))
+const LiquidityZones = lazy(() => import('./pages/LiquidityZones')) // <-- TAMBAH INI
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/signals" element={<Signals />} />
+            <Route path="/liquidity-zones" element={<LiquidityZones />} /> {/* <-- TAMBAH INI */}
             <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -26,7 +28,6 @@ function App() {
         </Suspense>
       </ErrorBoundary>
       
-      {/* Toast Global - Muncul di semua page */}
       <Toaster 
         position="top-right"
         toastOptions={{
