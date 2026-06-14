@@ -1,52 +1,64 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
-import { TrendingUp, TrendingDown, Activity, Wifi, WifiOff } from 'lucide-react'
+import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5400'
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:5400/ws/live'
-const WS_SIGNALS_URL = import.meta.env.VITE_WS_SIGNALS_URL || 'ws://127.0.0.1:5400/ws/signals'
+// HAPUS API_URL - PAKE RELATIVE PATH AJA
+// const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
 interface DashboardData {
   ai_status: string
   gold_price: number
-  ask_price?: number
-  spread?: number
+  ask_price: number
   daily_change: number
   daily_change_pct: number
   win_rate: number
   total_trades: number
+  data_source: 'MT5_LIVE' | 'STALE' | 'NONE'
+  spread: number
+  updated_at: string
+  updated_date: string
+  open_positions: number
+  last_update?: number
   active_signal: {
-    id?: number
     status: 'BUY' | 'SELL' | 'NONE'
     entry: number
     sl: number
     tp1: number
     tp2?: number
     tp3?: number
-    rr?: number
-    confidence?: number
     source?: string
-    time?: string
+    confidence?: number
+    rr?: number
     current_price?: number
     pnl?: number
+    time?: string
   }
   risk_engine: {
     lot_size: number
     drawdown: number
     max_daily_dd: number
     status: string
-    kill_switch: boolean
     balance: number
     equity: number
-    margin?: number
-    free_margin?: number
+    margin: number
+    free_margin: number
+    kill_switch: boolean
   }
-  open_positions?: number
-  updated_at: string
-  updated_date?: string
+  sessions: {
+    asia: { high: number; low: number; mid: number; range: number }
+    london: { high: number; low: number; mid: number; range: number }
+    newyork: { high: number; low: number; mid: number; range: number }
+  }
+  liquidity_zones: Array<{
+    type: string
+    price: number
+    status: string
+    age: string
+    ob: boolean
+  }>
 }
 
 interface AnalyticsData {
@@ -113,11 +125,7 @@ export default function Dashboard() {
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null)
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const wsLive = useRef<WebSocket | null>(null)
-  const wsSignals = useRef<WebSocket | null>(null)
-  const [wsConnected, setWsConnected] = useState(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
@@ -125,146 +133,54 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    abortControllerRef.current = new AbortController()
     const fetchAll = async () => {
       try {
-        const [settingsRes, analyticsRes, dashboardRes] = await Promise.all([
-          fetch(`${API_URL}/api/settings`, { signal: abortControllerRef.current?.signal }),
-          fetch(`${API_URL}/api/analytics?days=30`, { signal: abortControllerRef.current?.signal }),
-          fetch(`${API_URL}/api/dashboard`, { signal: abortControllerRef.current?.signal })
+        // PAKE RELATIVE PATH - VITE PROXY HANDLE
+        const [dashboardRes, settingsRes, analyticsRes] = await Promise.all([
+          fetch('/api/dashboard'),
+          fetch('/api/settings'),
+          fetch('/api/analytics?days=30')
         ])
+
+        if (dashboardRes.ok) {
+          const liveData = await dashboardRes.json()
+          console.log('Dashboard API:', liveData) // DEBUG
+          setData(liveData)
+          setConnected(true)
+        } else {
+          console.error('Dashboard API Error:', dashboardRes.status)
+          setConnected(false)
+        }
 
         if (settingsRes.ok) setSettings(await settingsRes.json())
         if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
-        if (dashboardRes.ok) setData(await dashboardRes.json())
 
       } catch (err: any) {
-        if (err.name!== 'AbortError') {
-          console.error('Fetch error:', err)
-          setError('Backend unreachable')
-        }
+        console.error('Fetch error:', err)
+        setConnected(false)
       } finally {
         setLoading(false)
       }
     }
+    
     fetchAll()
-    return () => abortControllerRef.current?.abort()
+    const interval = setInterval(fetchAll, 1000)
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout | null = null
-    let reconnectAttempts = 0
-    let isMounted = true
-
-    const connectWS = () => {
-      if (!isMounted) return
-      wsLive.current = new WebSocket(WS_URL)
-
-      wsLive.current.onopen = () => {
-        if (!isMounted) return
-        setError(null)
-        setWsConnected(true)
-        reconnectAttempts = 0
-      }
-
-      wsLive.current.onmessage = (event) => {
-        if (!isMounted) return
-        try {
-          const liveData = JSON.parse(event.data)
-          setData(prev => {
-            if (liveData.risk_engine?.kill_switch &&!prev?.risk_engine?.kill_switch) {
-              toast.error('🚨 KILL SWITCH TRIGGERED', { duration: 10000 })
-            }
-            return {...prev,...liveData }
-          })
-        } catch (e) {
-          console.error('WS parse error:', e)
-        }
-      }
-
-      wsLive.current.onerror = () => {
-        if (!isMounted) return
-        setWsConnected(false)
-      }
-
-      wsLive.current.onclose = () => {
-        if (!isMounted) return
-        setWsConnected(false)
-        reconnectAttempts++
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)
-        reconnectTimeout = setTimeout(connectWS, delay)
-      }
+    if (data?.risk_engine?.kill_switch) {
+      toast.error('🚨 KILL SWITCH TRIGGERED', { duration: 10000 })
     }
-
-    connectWS()
-    return () => {
-      isMounted = false
-      wsLive.current?.close()
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-    }
-  }, [])
-
-  useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout | null = null
-    let isMounted = true
-
-    const connectSignalsWS = () => {
-      if (!isMounted) return
-      wsSignals.current = new WebSocket(WS_SIGNALS_URL)
-
-      wsSignals.current.onopen = () => {
-        console.log('Signals WS connected')
-      }
-
-      wsSignals.current.onmessage = (event) => {
-        if (!isMounted) return
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.type === 'signal_update') {
-            const updatedSignal = msg.data
-            setData(prev => {
-              if (!prev) return prev
-              if (prev.active_signal?.id === updatedSignal.id || prev.active_signal?.entry === updatedSignal.entry) {
-                if (updatedSignal.status === 'ACTIVE' && prev.active_signal?.status === 'WAITING') {
-                  toast.success(`🎯 Signal TRIGGERED: ${updatedSignal.type} @ ${updatedSignal.entry}`)
-                } else if (updatedSignal.status.includes('HIT')) {
-                  toast.success(`✅ ${updatedSignal.status}: PnL $${updatedSignal.pnl?.toFixed(2)}`)
-                }
-                return {
-                 ...prev,
-                  active_signal: {
-                   ...prev.active_signal,
-                   ...updatedSignal
-                  }
-                }
-              }
-              return prev
-            })
-          }
-        } catch (e) {
-          console.error('Signals WS parse error:', e)
-        }
-      }
-
-      wsSignals.current.onclose = () => {
-        if (!isMounted) return
-        reconnectTimeout = setTimeout(connectSignalsWS, 3000)
-      }
-    }
-
-    connectSignalsWS()
-    return () => {
-      isMounted = false
-      wsSignals.current?.close()
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-    }
-  }, [])
+  }, [data?.risk_engine?.kill_switch])
 
   const timeStr = time.toLocaleTimeString('en-US', { hour12: false })
   const dateStr = time.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
 
   const killSwitchActive = data?.risk_engine?.kill_switch || false
   const aiModules = settings?.ai_modules || { smc: false, prz: false, liquidity: false, risk_ai: false }
+  const isLive = data?.data_source === 'MT5_LIVE'
+  const isStale = data?.data_source === 'STALE'
 
   const AI_PANEL = useMemo(() => [
     { model: 'SMC Engine', status: aiModules.smc? 'Active' : 'Off', color: aiModules.smc? 'text-green-400' : 'text-gray-500' },
@@ -276,18 +192,21 @@ export default function Dashboard() {
   const activeSignal = data?.active_signal
   const hasActiveSignal = activeSignal && activeSignal.status!== 'NONE' && activeSignal.entry > 0
   const spread = data?.spread || (data?.ask_price && data?.gold_price? data.ask_price - data.gold_price : 0)
+  const hasData = data && data.gold_price > 0
 
   return (
     <PageLayout
       title="FUTURISTIC GOLD TRADING ANALYTICS"
-      subtitle="Institutional Intelligence Layer · XAUUSD Analytics · Professional Environment"
+      subtitle={`Institutional Intelligence Layer · XAUUSD Analytics · ${data?.data_source || 'Loading'}`}
       badge={
         <div className="flex items-center gap-2">
-          {wsConnected? <Wifi size={14} className="text-green-400" /> : <WifiOff size={14} className="text-red-400" />}
-          {wsConnected? 'Live WS' : 'Reconnecting'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
+          {isLive? <CheckCircle size={14} className="text-green-400" /> : 
+           isStale? <Clock size={14} className="text-yellow-400" /> : 
+           <WifiOff size={14} className="text-red-400" />}
+          {isLive? 'LIVE' : isStale? 'STANDBY' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
         </div>
       }
-      badgeColor={error? 'text-red-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
+      badgeColor={!connected? 'text-red-400' : isStale? 'text-yellow-400' : killSwitchActive? 'text-red-400' : 'text-green-400'}
     >
       {killSwitchActive && (
         <div className="mb-4 px-3 py-2 border border-red-500/50 bg-red-500/10 rounded text-red-200 text-sm animate-pulse">
@@ -295,9 +214,15 @@ export default function Dashboard() {
         </div>
       )}
 
-      {error &&!wsConnected && (
+      {!connected && (
         <div className="mb-4 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded text-red-200/70 text-xs">
-          <span className="text-red-400 font-semibold">ERROR:</span> {error}
+          <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check backend running on 127.0.0.1:8000.
+        </div>
+      )}
+
+      {isStale && (
+        <div className="mb-4 px-3 py-2 border border-yellow-500/30 bg-yellow-500/5 rounded text-yellow-200/70 text-xs">
+          <span className="text-yellow-400 font-semibold">STANDBY:</span> No new data from MT5 in 15+ seconds. Showing last cached price.
         </div>
       )}
 
@@ -306,7 +231,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-4">
-        {loading? Array(8).fill(0).map((_, i) => <SkeletonCard key={i} />) : (
+        {loading ||!hasData? Array(8).fill(0).map((_, i) => <SkeletonCard key={i} />) : (
           <>
             <Card className="col-span-1">
               <div className="text-gray-400 text-xs uppercase tracking-widest mb-1">XAUUSD PRICE</div>
@@ -375,11 +300,11 @@ export default function Dashboard() {
             <Card className="col-span-1">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-gray-400 text-xs uppercase tracking-widest">AI STATUS</div>
-                <span className={`text-xs ${killSwitchActive? 'text-red-400' : 'text-green-400'} border ${killSwitchActive? 'border-red-400/50' : 'border-green-400/50'} px-1 rounded`}>
-                  {killSwitchActive? 'Stop' : 'Live'}
+                <span className={`text-xs ${killSwitchActive? 'text-red-400' : isLive? 'text-green-400' : 'text-yellow-400'} border ${killSwitchActive? 'border-red-400/50' : isLive? 'border-green-400/50' : 'border-yellow-400/50'} px-1 rounded`}>
+                  {killSwitchActive? 'Stop' : isLive? 'Live' : 'Standby'}
                 </span>
               </div>
-              <div className={`text-xl font-bold ${killSwitchActive? 'text-red-400' : 'text-green-400'}`}>
+              <div className={`text-xl font-bold ${killSwitchActive? 'text-red-400' : isLive? 'text-green-400' : 'text-yellow-400'}`}>
                 {data?.ai_status || 'STANDBY'}
               </div>
               <div className="text-gray-500 text-xs mt-1">Equity: ${data?.risk_engine?.equity?.toFixed(0) || '0'}</div>
@@ -502,6 +427,7 @@ export default function Dashboard() {
             <div>Total P/L: <span className="text-yellow-400">${analytics?.total_pl?.toFixed(2) || '0.00'}</span></div>
             <div>Last Update: {data?.updated_at || timeStr}</div>
             <div>Server: {dateStr}</div>
+            <div>Source: <span className="text-cyan-400">{data?.data_source || 'NONE'}</span></div>
           </div>
         </Card>
       </div>
