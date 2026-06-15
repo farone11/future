@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
-from typing import Dict, Optional, List, Any # <-- TAMBAH Any
+from typing import Dict, Optional, List, Any
 import asyncio
 from contextlib import asynccontextmanager
 import os
@@ -35,7 +35,7 @@ MT5_LIVE_DATA = {
     "daily_change": 0, "daily_change_pct": 0, "source": "NONE", "time_msc": 0
 }
 LAST_MT5_UPDATE = 0
-SIGNALS_CACHE: Dict[str, Any] = {"signals": []} # <-- GANTI any jadi Any
+SIGNALS_CACHE: Dict[str, Any] = {"signals": []}
 MT5_HISTORY: List[dict] = []
 MT5_POSITIONS: List[dict] = []
 
@@ -81,7 +81,7 @@ class SessionsPayload(BaseModel):
     sessions: Dict[str, Dict[str, float]]
 
 class LiquidityPayload(BaseModel):
-    zones: List[Dict[str, Any]] # <-- GANTI any jadi Any
+    zones: List[Dict[str, Any]]
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
@@ -279,8 +279,24 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(signal_monitor())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="14.3 MT5-Sessions", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="FARONE.AI API", version="14.4 Fix-CORS", lifespan=lifespan)
+
+# CORS UPGRADE - INI YANG BIKIN PUBLIC BISA LIVE
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://future-da3.pages.dev",
+    "https://faronecapital.online",
+    "https://www.faronecapital.online",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/api/health")
 def health(): 
