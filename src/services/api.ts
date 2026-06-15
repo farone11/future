@@ -1,90 +1,58 @@
-const API_URL = import.meta.env.VITE_API_URL || '';
-const DEFAULT_TIMEOUT = 8000; // 8 detik
-const MAX_RETRIES = 2;
+const BASE_URL = import.meta.env.VITE_API_URL
 
-type ConnectionState = 'LIVE' | 'STANDBY' | 'ERROR';
+interface FetchOptions extends RequestInit {
+  timeout?: number
+  retries?: number
+}
 
-class ApiService {
-  private connectionState: ConnectionState = 'STANDBY';
-  private listeners: ((state: ConnectionState) => void)[] = [];
-
-  onConnectionChange(cb: (state: ConnectionState) => void) {
-    this.listeners.push(cb);
-    return () => {
-      this.listeners = this.listeners.filter(l => l!== cb);
-    };
-  }
-
-  private setConnectionState(state: ConnectionState) {
-    this.connectionState = state;
-    this.listeners.forEach(cb => cb(state));
-  }
-
-  getConnectionState() {
-    return this.connectionState;
-  }
-
-  private async fetchWithRetry(
-    endpoint: string,
-    options: RequestInit = {},
-    retries = MAX_RETRIES
-  ): Promise<Response> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
-
-    try {
-      const res = await fetch(`${API_URL}${endpoint}`, {
-       ...options,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-         ...options.headers,
-        },
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!res.ok && retries > 0) {
-        await new Promise(r => setTimeout(r, 1000)); // backoff 1s
-        return this.fetchWithRetry(endpoint, options, retries - 1);
-      }
-      
-      if (res.ok) this.setConnectionState('LIVE');
-      else this.setConnectionState('ERROR');
-      
-      return res;
-    } catch (err) {
-      clearTimeout(timeoutId);
-      if (retries > 0) {
-        await new Promise(r => setTimeout(r, 1000));
-        return this.fetchWithRetry(endpoint, options, retries - 1);
-      }
-      this.setConnectionState('ERROR');
-      throw err;
-    }
-  }
-
-  // Real-time endpoints: 3s
-  async getStatus() {
-    const res = await this.fetchWithRetry('/api/status');
-    return res.json();
-  }
-
-  // Low-frequency endpoints: 60s
-  async getDashboard() {
-    const res = await this.fetchWithRetry('/api/dashboard');
-    return res.json();
-  }
-
-  async getLiquidityZones() {
-    const res = await this.fetchWithRetry('/api/liquidity');
-    return res.json();
-  }
-
-  async getHistory() {
-    const res = await this.fetchWithRetry('/api/history');
-    return res.json();
+class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
   }
 }
 
-export const api = new ApiS
+async function apiFetch<T>(
+  endpoint: string, 
+  options: FetchOptions = {}
+): Promise<T> {
+  const { timeout = 5000, retries = 2,...fetchOptions } = options
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(`${BASE_URL}${endpoint}`, {
+       ...fetchOptions,
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json',...fetchOptions.headers }
+      })
+      
+      clearTimeout(timeoutId)
+      
+      if (!res.ok) {
+        throw new ApiError(`HTTP ${res.status}`, res.status)
+      }
+      
+      return await res.json()
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new ApiError('Request timeout', 408)
+      }
+      if (i === retries) throw err
+      await new Promise(r => setTimeout(r, 1000 * (i + 1))) // backoff
+    }
+  }
+  throw new Error('Unreachable')
+}
+
+export const api = {
+  get: <T>(endpoint: string) => apiFetch<T>(endpoint, { method: 'GET' }),
+  post: <T>(endpoint: string, body: any) => apiFetch<T>(endpoint, { 
+    method: 'POST', 
+    body: JSON.stringify(body) 
+  })
+}
+
+export type ApiStatus = 'LIVE' | 'STANDBY' | 'ERROR'
