@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import PageLayout from '../components/PageLayout';
 import Card from '../components/Card';
+import { api } from '../services/api';
 
 interface SessionData {
   high: number;
@@ -26,55 +27,75 @@ interface DashboardData {
   liquidity_zones: LiquidityZone[];
 }
 
+// Sesuai Architecture Rules: Dashboard refresh 3000ms
+const REFRESH_INTERVAL = 3000;
+
+// Graceful fallback kalo API mati
+const FALLBACK_DATA: DashboardData = {
+  sessions: {
+    asia: { high: 0, low: 0, mid: 0, range: 0 },
+    london: { high: 0, low: 0, mid: 0, range: 0 },
+    newyork: { high: 0, low: 0, mid: 0, range: 0 },
+  },
+  liquidity_zones: []
+};
+
 export default function LiquidityZones() {
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [data, setData] = useState<DashboardData>(FALLBACK_DATA);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [connectionState, setConnectionState] = useState(api.getConnectionState());
 
   useEffect(() => {
+    // Subscribe ke connection state: LIVE / STANDBY / ERROR
+    const unsubscribe = api.onConnectionChange(setConnectionState);
+    
+    let mounted = true;
+
     const fetchData = async () => {
       try {
-        // UPGRADE: Pake VITE_API_URL biar jalan di Cloudflare Production
-        const API_URL = import.meta.env.VITE_API_URL || '';
-        const res = await fetch(`${API_URL}/api/dashboard`);
-
-        if (res.ok) {
-          const json = await res.json();
-          console.log('API Response:', json);
+        // Pake centralized API service, bukan fetch langsung
+        const json = await api.getDashboard();
+        if (mounted) {
           setData(json);
           setError(null);
-        } else {
-          setError(`API Error: ${res.status}`);
-          console.error('API Error:', res.status);
         }
       } catch (err) {
-        setError('Failed to connect to API');
-        console.error('Failed fetch liquidity:', err);
+        if (mounted) {
+          setError('API unavailable - running in fallback mode');
+          console.error('Failed fetch liquidity:', err);
+        }
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchData, REFRESH_INTERVAL);
+    
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+      unsubscribe();
+    };
   }, []);
 
-  const zones = data?.liquidity_zones || [];
-  const sessions = data?.sessions;
+  const zones = data.liquidity_zones || [];
+  const sessions = data.sessions;
 
   const bslCount = zones.filter(z => z.type === 'BSL' && z.status === 'ACTIVE').length;
   const sslCount = zones.filter(z => z.type === 'SSL' && z.status === 'ACTIVE').length;
-  const sessionCount = sessions? Object.values(sessions).filter(s => s.range > 0).length : 0;
+  const sessionCount = Object.values(sessions).filter(s => s.range > 0).length;
 
   return (
     <PageLayout
       title="Liquidity Zones - XAUUSD H1"
       subtitle="Buy-Side & Sell-Side Liquidity + Session Levels · Auto Sweep Detection"
+      connectionState={connectionState}
     >
       {error && (
         <div className="mb-4 bg-red-900/20 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
-          {error} - Check API connection
+          {error}
         </div>
       )}
 
@@ -153,7 +174,7 @@ export default function LiquidityZones() {
           { name: 'London Session', key: 'london' as const },
           { name: 'New York Session', key: 'newyork' as const }
         ].map((session) => {
-          const s = sessions?.[session.key];
+          const s = sessions[session.key];
           const hasData = s && s.range > 0;
           return (
             <Card key={session.name}>
