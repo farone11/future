@@ -42,7 +42,7 @@ export default function PageLayout({
           <img 
             src="/layout_08.png" 
             alt="Banner" 
-            className="w-full h-auto max-h- object-cover object-center"
+            className="w-full h-auto object-cover object-center"
             onError={(e) => e.currentTarget.style.display = 'none'}
           />
         </div>
@@ -53,12 +53,16 @@ export default function PageLayout({
             <h1 className="text-white font-bold text-xl lg:text-2xl tracking-wide uppercase">
               {title}
             </h1>
-            {subtitle && <p className="text-gray-400 text-xs lg:text-sm mt-1">{subtitle}</p>}
+            
+            {/* FIX 1: Ganti <p> jadi <div> */}
+            {subtitle && <div className="text-gray-400 text-xs lg:text-sm mt-1">{subtitle}</div>}
+            
+            {/* FIX 2: Ganti <p> jadi <div> biar bisa pake flex */}
             {badge && (
-              <p className={`text-xs mt-2 flex items-center gap-1 ${badgeColor}`}>
+              <div className={`text-xs mt-2 flex items-center gap-1 ${badgeColor}`}>
                 <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
-                {badge}
-              </p>
+                <span>{badge}</span>
+              </div>
             )}
           </div>
           
