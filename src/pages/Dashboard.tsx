@@ -1,11 +1,10 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import toast from 'react-hot-toast'
-import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
+import { TrendingUp, TrendingDown, Activity, WifiOff, CheckCircle, Clock } from 'lucide-react'
 
-// WAJIB PAKE INI - JANGAN DI-COMMENT
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 
 interface DashboardData {
@@ -126,6 +125,17 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<SettingsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [connected, setConnected] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const isVisible = useRef(true)
+
+  // Track tab visibility - pause fetch kalo tab ga aktif
+  useEffect(() => {
+    const handleVisibility = () => {
+      isVisible.current =!document.hidden
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
@@ -133,39 +143,58 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
-    const fetchAll = async () => {
+    const fetchDashboard = async () => {
+      if (!isVisible.current) return // Skip kalo tab ga aktif
+
+      if (abortRef.current) abortRef.current.abort()
+      abortRef.current = new AbortController()
+
       try {
-        // UDAH BENER - PAKE API_URL DARI ENV
-        const [dashboardRes, settingsRes, analyticsRes] = await Promise.all([
-          fetch(`${API_URL}/api/dashboard`),
-          fetch(`${API_URL}/api/settings`),
-          fetch(`${API_URL}/api/analytics?days=30`)
-        ])
+        const dashboardRes = await fetch(`${API_URL}/api/dashboard`, {
+          signal: abortRef.current.signal,
+          cache: 'no-store' // Biar selalu fresh
+        })
 
         if (dashboardRes.ok) {
           const liveData = await dashboardRes.json()
-          console.log('Dashboard API:', liveData)
           setData(liveData)
           setConnected(true)
         } else {
-          console.error('Dashboard API Error:', dashboardRes.status, await dashboardRes.text())
           setConnected(false)
         }
-
-        if (settingsRes.ok) setSettings(await settingsRes.json())
-        if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
-
       } catch (err: any) {
-        console.error('Fetch error:', err)
-        setConnected(false)
+        if (err.name!== 'AbortError') {
+          setConnected(false)
+        }
       } finally {
         setLoading(false)
       }
     }
 
-    fetchAll()
-    const interval = setInterval(fetchAll, 1000)
-    return () => clearInterval(interval)
+    // Fetch settings + analytics terpisah, interval lebih lama
+    const fetchStatic = async () => {
+      try {
+        const [settingsRes, analyticsRes] = await Promise.all([
+          fetch(`${API_URL}/api/settings`),
+          fetch(`${API_URL}/api/analytics?days=30`)
+        ])
+        if (settingsRes.ok) setSettings(await settingsRes.json())
+        if (analyticsRes.ok) setAnalytics(await analyticsRes.json())
+      } catch {}
+    }
+
+    fetchDashboard()
+    fetchStatic()
+
+    // Dashboard: 3 detik, Settings+Analytics: 60 detik
+    const dashboardInterval = setInterval(fetchDashboard, 3000)
+    const staticInterval = setInterval(fetchStatic, 60000)
+
+    return () => {
+      clearInterval(dashboardInterval)
+      clearInterval(staticInterval)
+      if (abortRef.current) abortRef.current.abort()
+    }
   }, [])
 
   useEffect(() => {
@@ -226,7 +255,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="mb-4 px-3 py-2 border border-yellow-500/30 bg-yellow-500/5 rounded text-yellow-200/70 text-xs">
+      <div className="mb-4 px-3 py-2 border-yellow-500/30 bg-yellow-500/5 rounded text-yellow-200/70 text-xs">
         <span className="text-yellow-400 font-semibold">DISCLAIMER:</span> This dashboard is for informational and educational purposes only. Trading forex, CFDs, and gold involves substantial risk of loss and is not suitable for every investor. Past performance is not indicative of future results. AI signals are not financial advice.
       </div>
 
