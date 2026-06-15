@@ -5,8 +5,8 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 import toast from 'react-hot-toast'
 import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 
-// HAPUS API_URL - PAKE RELATIVE PATH AJA
-// const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
+// WAJIB PAKE INI - JANGAN DI-COMMENT
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 
 interface DashboardData {
   ai_status: string
@@ -135,20 +135,20 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        // PAKE RELATIVE PATH - VITE PROXY HANDLE
+        // UDAH BENER - PAKE API_URL DARI ENV
         const [dashboardRes, settingsRes, analyticsRes] = await Promise.all([
-          fetch('/api/dashboard'),
-          fetch('/api/settings'),
-          fetch('/api/analytics?days=30')
+          fetch(`${API_URL}/api/dashboard`),
+          fetch(`${API_URL}/api/settings`),
+          fetch(`${API_URL}/api/analytics?days=30`)
         ])
 
         if (dashboardRes.ok) {
           const liveData = await dashboardRes.json()
-          console.log('Dashboard API:', liveData) // DEBUG
+          console.log('Dashboard API:', liveData)
           setData(liveData)
           setConnected(true)
         } else {
-          console.error('Dashboard API Error:', dashboardRes.status)
+          console.error('Dashboard API Error:', dashboardRes.status, await dashboardRes.text())
           setConnected(false)
         }
 
@@ -162,7 +162,7 @@ export default function Dashboard() {
         setLoading(false)
       }
     }
-    
+
     fetchAll()
     const interval = setInterval(fetchAll, 1000)
     return () => clearInterval(interval)
@@ -200,8 +200,8 @@ export default function Dashboard() {
       subtitle={`Institutional Intelligence Layer · XAUUSD Analytics · ${data?.data_source || 'Loading'}`}
       badge={
         <div className="flex items-center gap-2">
-          {isLive? <CheckCircle size={14} className="text-green-400" /> : 
-           isStale? <Clock size={14} className="text-yellow-400" /> : 
+          {isLive? <CheckCircle size={14} className="text-green-400" /> :
+           isStale? <Clock size={14} className="text-yellow-400" /> :
            <WifiOff size={14} className="text-red-400" />}
           {isLive? 'LIVE' : isStale? 'STANDBY' : 'ERROR'} | Bias: {activeSignal?.status || 'LOADING'} | {timeStr}
         </div>
@@ -216,7 +216,7 @@ export default function Dashboard() {
 
       {!connected && (
         <div className="mb-4 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded text-red-200/70 text-xs">
-          <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check backend running on https://api.faronecapital.online.
+          <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check backend running on {API_URL}.
         </div>
       )}
 
