@@ -6,7 +6,7 @@ import toast from 'react-hot-toast'
 import { TrendingUp, TrendingDown, Activity, WifiOff, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 
 // HAPUS API_URL - PAKE RELATIVE PATH AJA
-// const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+// const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 
 interface DashboardData {
   ai_status: string
@@ -216,7 +216,7 @@ export default function Dashboard() {
 
       {!connected && (
         <div className="mb-4 px-3 py-2 border border-red-500/30 bg-red-500/5 rounded text-red-200/70 text-xs">
-          <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check backend running on 127.0.0.1:8000.
+          <span className="text-red-400 font-semibold">ERROR:</span> Connection to API failed. Check backend running on https://api.faronecapital.online.
         </div>
       )}
 
