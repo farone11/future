@@ -78,6 +78,42 @@ class MT5TickModel(BaseModel):
     margin: Optional[float] = 0
     free_margin: Optional[float] = 0
 
+# === INI YG PALING PENTING - FIX HISTORY ===
+class Deal(BaseModel):
+    ticket: int
+    position_id: int
+    date: str
+    time: int
+    type: str
+    volume: float
+    price_open: float
+    price_close: float # WAJIB ADA INI
+    profit: float
+    commission: float
+    swap: float
+    symbol: str
+    result: str
+    reason: str
+
+class HistoryPayload(BaseModel):
+    deals: List[Deal]
+
+class Position(BaseModel):
+    ticket: int
+    time: int
+    type: str
+    volume: float
+    price_open: float
+    price_current: float
+    sl: float
+    tp: float
+    profit: float
+    swap: float
+    symbol: str
+
+class PositionsPayload(BaseModel):
+    positions: List[Position]
+
 class SessionsPayload(BaseModel):
     sessions: Dict[str, Dict[str, float]]
 
@@ -294,7 +330,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(signal_monitor())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="14.7 Add-Market-Data", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="15.0 Fix-History", lifespan=lifespan)
 
 origins = [
     "http://localhost:5173",
@@ -322,7 +358,6 @@ def health():
         "timestamp": get_jakarta_time().isoformat()
     }
 
-# === ENDPOINT BARU BUAT FRONTEND ===
 @app.get("/api/market-data")
 def market_data():
     mt5_data = get_mt5_data_cached()
@@ -400,31 +435,10 @@ async def get_mt5_history(days: int = Query(30)):
         raise HTTPException(500, str(e))
 
 @app.post("/api/mt5-history")
-async def save_mt5_history(request: Request):
+async def save_mt5_history(payload: HistoryPayload):
     global MT5_HISTORY
     try:
-        data = await request.json()
-        deals = data.get("deals", [])
-        clean_deals = []
-        for d in deals:
-            clean_deals.append({
-                "ticket": d.get("ticket", 0),
-                "order": d.get("order", 0),
-                "position_id": d.get("position_id", 0),
-                "date": d.get("date", ""),
-                "time": d.get("time", 0),
-                "type": d.get("type", ""),
-                "volume": float(d.get("volume", 0.0)),
-                "price": float(d.get("price", 0.0)),
-                "price_open": float(d.get("price_open", 0.0)),
-                "profit": float(d.get("profit", 0.0)),
-                "commission": float(d.get("commission", 0.0)),
-                "swap": float(d.get("swap", 0.0)),
-                "symbol": d.get("symbol", DISPLAY_SYMBOL),
-                "result": d.get("result", ""),
-                "reason": d.get("reason", "Manual")
-            })
-        MT5_HISTORY = clean_deals
+        MT5_HISTORY = [deal.model_dump() for deal in payload.deals]
         save_trade_history(MT5_HISTORY)
         log_info(f"MT5 History: {len(MT5_HISTORY)} deals received")
         return {"status": "ok", "count": len(MT5_HISTORY)}
@@ -437,11 +451,10 @@ async def get_mt5_positions():
     return {"positions": load_positions()}
 
 @app.post("/api/mt5-positions")
-async def receive_mt5_positions(request: Request):
+async def receive_mt5_positions(payload: PositionsPayload):
     global MT5_POSITIONS
     try:
-        data = await request.json()
-        MT5_POSITIONS = data.get("positions", [])
+        MT5_POSITIONS = [pos.model_dump() for pos in payload.positions]
         save_positions(MT5_POSITIONS)
         log_info(f"MT5 Positions: {len(MT5_POSITIONS)} open")
         return {"status": "ok", "count": len(MT5_POSITIONS)}
