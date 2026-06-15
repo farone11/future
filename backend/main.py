@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta, time
@@ -22,6 +22,8 @@ SIGNALS_FILE = Path("signals.json")
 CACHE_FILE = Path("price_cache.json")
 HISTORY_FILE = Path("trade_history.json")
 POSITIONS_FILE = Path("open_positions.json")
+SESSIONS_FILE = Path("sessions.json")
+LIQUIDITY_FILE = Path("liquidity.json")
 
 DEFAULT_SETTINGS = {
     "risk_per_trade": 1.0, "max_daily_dd": 3.0, "max_lot": 0.10, "kill_switch": True,
@@ -38,7 +40,6 @@ LAST_MT5_UPDATE = 0
 SIGNALS_CACHE: Dict[str, Any] = {"signals": []}
 MT5_HISTORY: List[dict] = []
 MT5_POSITIONS: List[dict] = []
-
 MT5_SESSIONS = {
     "asia": {"high": 0, "low": 0, "mid": 0, "range": 0},
     "london": {"high": 0, "low": 0, "mid": 0, "range": 0},
@@ -83,79 +84,86 @@ class SessionsPayload(BaseModel):
 class LiquidityPayload(BaseModel):
     zones: List[Dict[str, Any]]
 
-def load_settings() -> dict:
-    if SETTINGS_FILE.exists():
+# === FILE HELPERS ===
+def load_json_file(file: Path, default: Any) -> Any:
+    if file.exists():
         try:
-            with open(SETTINGS_FILE, "r") as f: return {**DEFAULT_SETTINGS, **json.load(f)}
-        except Exception as e: log_error(f"Settings corrupt: {e}")
-    return DEFAULT_SETTINGS
+            with open(file, "r") as f: return json.load(f)
+        except Exception as e: log_error(f"Failed load {file}: {e}")
+    return default
+
+def save_json_file(file: Path, data: Any):
+    try:
+        with open(file, "w") as f: json.dump(data, f, indent=2)
+    except Exception as e: log_error(f"Failed save {file}: {e}")
+
+def load_settings() -> dict:
+    return {**DEFAULT_SETTINGS, **load_json_file(SETTINGS_FILE, {})}
 
 def save_settings(data: dict):
     validated = SettingsModel(**data)
-    with open(SETTINGS_FILE, "w") as f: json.dump(validated.model_dump(), f, indent=2)
+    save_json_file(SETTINGS_FILE, validated.model_dump())
 
 def load_signals_to_cache():
-    if SIGNALS_FILE.exists():
-        try:
-            with open(SIGNALS_FILE, "r") as f: SIGNALS_CACHE["signals"] = json.load(f)
-        except Exception as e: log_error(f"Failed load signals: {e}"); SIGNALS_CACHE["signals"] = []
-    else: SIGNALS_CACHE["signals"] = []
+    SIGNALS_CACHE["signals"] = load_json_file(SIGNALS_FILE, [])
 
 def save_signals():
-    try:
-        SIGNALS_CACHE["signals"].sort(key=lambda x: (not x.get('source', '').startswith('AI-'), -x['id']))
-        with open(SIGNALS_FILE, "w") as f: json.dump(SIGNALS_CACHE["signals"], f, indent=2)
-    except Exception as e: log_error(f"Failed save signals: {e}")
+    SIGNALS_CACHE["signals"].sort(key=lambda x: (not x.get('source', '').startswith('AI-'), -x['id']))
+    save_json_file(SIGNALS_FILE, SIGNALS_CACHE["signals"])
 
 def load_price_cache():
-    if CACHE_FILE.exists():
-        try:
-            with open(CACHE_FILE, "r") as f: return json.load(f)
-        except: pass
-    return {"price": 0, "ask": 0, "bid": 0, "time": get_jakarta_time().isoformat(), "change": 0, "source": "NONE", "day_open": 0}
+    return load_json_file(CACHE_FILE, {
+        "price": 0, "ask": 0, "bid": 0, "time": get_jakarta_time().isoformat(), 
+        "change": 0, "source": "NONE", "day_open": 0
+    })
 
 def save_price_cache(data: dict):
-    with open(CACHE_FILE, "w") as f:
-        json.dump(data, f)
+    save_json_file(CACHE_FILE, data)
 
 def load_trade_history() -> List[dict]:
-    if HISTORY_FILE.exists():
-        try:
-            with open(HISTORY_FILE, "r") as f: return json.load(f)
-        except: pass
-    return []
+    return load_json_file(HISTORY_FILE, [])
 
 def save_trade_history(data: List[dict]):
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    save_json_file(HISTORY_FILE, data)
 
 def load_positions() -> List[dict]:
-    if POSITIONS_FILE.exists():
-        try:
-            with open(POSITIONS_FILE, "r") as f: return json.load(f)
-        except: pass
-    return []
+    return load_json_file(POSITIONS_FILE, [])
 
 def save_positions(data: List[dict]):
-    with open(POSITIONS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    save_json_file(POSITIONS_FILE, data)
 
+def load_sessions() -> dict:
+    return load_json_file(SESSIONS_FILE, MT5_SESSIONS)
+
+def save_sessions(data: dict):
+    save_json_file(SESSIONS_FILE, data)
+
+def load_liquidity() -> List[dict]:
+    return load_json_file(LIQUIDITY_FILE, [])
+
+def save_liquidity(data: List[dict]):
+    save_json_file(LIQUIDITY_FILE, data)
+
+# === CORE LOGIC ===
 def get_mt5_data_cached():
     global LAST_MT5_UPDATE, MT5_LIVE_DATA
     now = datetime.now().timestamp()
     is_live = (now - LAST_MT5_UPDATE) < 15 and MT5_LIVE_DATA["source"] == "MT5"
     cached = load_price_cache()
     jakarta_time = get_jakarta_time()
-    day_open = cached.get("day_open", MT5_LIVE_DATA["bid"])
+    day_open = cached.get("day_open", MT5_LIVE_DATA["bid"]) or MT5_LIVE_DATA["bid"] or 1
     current_price = MT5_LIVE_DATA["bid"] if is_live else cached.get("price", 0)
     daily_change = current_price - day_open if day_open > 0 else 0
     daily_change_pct = (daily_change / day_open * 100) if day_open > 0 else 0
+    
     if jakarta_time.hour == 0 and jakarta_time.minute < 2 and "day_open_reset" not in cached:
         cached["day_open"] = current_price
         cached["day_open_reset"] = True
         save_price_cache(cached)
     elif jakarta_time.hour!= 0:
         cached.pop("day_open_reset", None)
+        save_price_cache(cached)
+    
     if is_live:
         return {
             "price": MT5_LIVE_DATA["bid"], "ask": MT5_LIVE_DATA["ask"],
@@ -175,7 +183,10 @@ def get_mt5_data_cached():
         "daily_change": round(daily_change, 2), "daily_change_pct": round(daily_change_pct, 2),
         "time": jakarta_time.strftime("%H:%M:%S"),
         "date": jakarta_time.strftime("%Y-%m-%d"),
-        "balance": 0, "equity": 0, "margin": 0, "free_margin": 0,
+        "balance": MT5_LIVE_DATA["balance"],
+        "equity": MT5_LIVE_DATA["equity"],
+        "margin": MT5_LIVE_DATA["margin"], 
+        "free_margin": MT5_LIVE_DATA["free_margin"],
         "source": "STALE",
         "last_update": LAST_MT5_UPDATE
     }
@@ -196,26 +207,28 @@ def calculate_analytics(days: int = 30) -> dict:
             trade_date = datetime.fromisoformat(t["date"].replace(" ", "T"))
             if trade_date >= cutoff:
                 filtered_trades.append(t)
-        except:
-            continue
+        except: continue
+    
     if not filtered_trades:
         return {
             "profit_factor": 0, "max_dd_pct": 0, "max_drawdown": 0,
             "sharpe_ratio": 0, "sortino_ratio": 0, "expectancy": 0,
             "recovery_factor": 0, "total_pl": 0, "equity_curve": []
         }
-    wins = [t["profit"] for t in filtered_trades if t["profit"] > 0]
-    losses = [t["profit"] for t in filtered_trades if t["profit"] < 0]
-    total_pl = sum(t["profit"] for t in filtered_trades)
+    
+    wins = [t.get("profit", 0) for t in filtered_trades if t.get("profit", 0) > 0]
+    losses = [t.get("profit", 0) for t in filtered_trades if t.get("profit", 0) < 0]
+    total_pl = sum(t.get("profit", 0) for t in filtered_trades)
     gross_profit = sum(wins) if wins else 0
     gross_loss = abs(sum(losses)) if losses else 0
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+    
     equity = 10000
     equity_curve = [{"date": "Start", "equity": equity, "drawdown": 0}]
     max_equity = equity
     max_dd = 0
     for t in sorted(filtered_trades, key=lambda x: x["date"]):
-        equity += t["profit"]
+        equity += t.get("profit", 0)
         max_equity = max(max_equity, equity)
         dd = max_equity - equity
         max_dd = max(max_dd, dd)
@@ -225,12 +238,12 @@ def calculate_analytics(days: int = 30) -> dict:
             "drawdown": round(dd, 2)
         })
     max_dd_pct = (max_dd / max_equity * 100) if max_equity > 0 else 0
+    
     return {
         "profit_factor": round(profit_factor, 2),
         "max_dd_pct": round(max_dd_pct, 1),
         "max_drawdown": round(max_dd, 2),
-        "sharpe_ratio": 0,
-        "sortino_ratio": 0,
+        "sharpe_ratio": 0, "sortino_ratio": 0,
         "expectancy": round(total_pl / len(filtered_trades), 2) if filtered_trades else 0,
         "recovery_factor": round(total_pl / max_dd, 2) if max_dd > 0 else 0,
         "total_pl": round(total_pl, 2),
@@ -250,15 +263,15 @@ async def signal_monitor():
                     elif signal["type"] == "SELL" and bid >= signal["entry"]: new_status = "ACTIVE"; signal["triggered_at"] = get_jakarta_time().isoformat()
                 elif signal["status"] == "ACTIVE":
                     if signal["type"] == "BUY":
-                        if signal.get("tp3") and bid >= signal["tp3"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp3"] - signal["entry"]) * 100
-                        elif signal.get("tp2") and bid >= signal["tp2"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp2"] - signal["entry"]) * 100
-                        elif bid >= signal["tp1"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp1"] - signal["entry"]) * 100
-                        elif bid <= signal["sl"]: new_status = "CLOSED"; signal["pnl"] = (signal["sl"] - signal["entry"]) * 100
+                        if signal.get("tp3") and bid >= signal["tp3"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp3"] - signal["entry"]) * 100; signal["close_reason"] = "TP3"
+                        elif signal.get("tp2") and bid >= signal["tp2"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp2"] - signal["entry"]) * 100; signal["close_reason"] = "TP2"
+                        elif bid >= signal["tp1"]: new_status = "CLOSED"; signal["pnl"] = (signal["tp1"] - signal["entry"]) * 100; signal["close_reason"] = "TP1"
+                        elif bid <= signal["sl"]: new_status = "CLOSED"; signal["pnl"] = (signal["sl"] - signal["entry"]) * 100; signal["close_reason"] = "SL"
                     else:
-                        if signal.get("tp3") and ask <= signal["tp3"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp3"]) * 100
-                        elif signal.get("tp2") and ask <= signal["tp2"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp2"]) * 100
-                        elif ask <= signal["tp1"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp1"]) * 100
-                        elif ask >= signal["sl"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["sl"]) * 100
+                        if signal.get("tp3") and ask <= signal["tp3"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp3"]) * 100; signal["close_reason"] = "TP3"
+                        elif signal.get("tp2") and ask <= signal["tp2"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp2"]) * 100; signal["close_reason"] = "TP2"
+                        elif ask <= signal["tp1"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["tp1"]) * 100; signal["close_reason"] = "TP1"
+                        elif ask >= signal["sl"]: new_status = "CLOSED"; signal["pnl"] = (signal["entry"] - signal["sl"]) * 100; signal["close_reason"] = "SL"
                 signal["current_price"] = bid if signal["type"] == "BUY" else ask
                 if new_status!= old_status:
                     signal["status"] = new_status
@@ -273,18 +286,20 @@ async def lifespan(app: FastAPI):
     Path("logs").mkdir(exist_ok=True)
     log_info("Starting Farone API - MT5 Only Mode")
     load_settings(); load_signals_to_cache()
-    global MT5_HISTORY, MT5_POSITIONS
+    global MT5_HISTORY, MT5_POSITIONS, MT5_SESSIONS, MT5_LIQUIDITY_ZONES
     MT5_HISTORY = load_trade_history()
     MT5_POSITIONS = load_positions()
+    MT5_SESSIONS = load_sessions()
+    MT5_LIQUIDITY_ZONES = load_liquidity()
     asyncio.create_task(signal_monitor())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="14.4 Fix-CORS", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="14.7 Add-Market-Data", lifespan=lifespan)
 
-# CORS UPGRADE - INI YANG BIKIN PUBLIC BISA LIVE
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:3000",
     "https://future-da3.pages.dev",
     "https://faronecapital.online",
     "https://www.faronecapital.online",
@@ -305,6 +320,46 @@ def health():
         "data_source": MT5_LIVE_DATA["source"], 
         "last_update": LAST_MT5_UPDATE,
         "timestamp": get_jakarta_time().isoformat()
+    }
+
+# === ENDPOINT BARU BUAT FRONTEND ===
+@app.get("/api/market-data")
+def market_data():
+    mt5_data = get_mt5_data_cached()
+    positions = load_positions()
+    active_sig = get_active_signal()
+    
+    ai_signal = "STANDBY"
+    signal_strength = 0
+    signal_tp = 0
+    signal_sl = 0
+    
+    if active_sig["status"] in ["WAITING", "ACTIVE", "TRIGGERED"]:
+        ai_signal = active_sig["type"]
+        signal_strength = active_sig.get("confidence", 85)
+        signal_tp = active_sig.get("tp1", 0)
+        signal_sl = active_sig.get("sl", 0)
+    
+    return {
+        "bid": mt5_data["price"],
+        "ask": mt5_data["ask"],
+        "spread": mt5_data["spread"],
+        "daily_change": mt5_data["daily_change"],
+        "daily_change_pct": mt5_data["daily_change_pct"],
+        "time": mt5_data["time"],
+        "date": mt5_data["date"],
+        "balance": mt5_data["balance"],
+        "equity": mt5_data["equity"],
+        "margin": mt5_data["margin"],
+        "free_margin": mt5_data["free_margin"],
+        "source": mt5_data["source"],
+        "last_update": mt5_data["last_update"],
+        "ai_signal": ai_signal,
+        "signal_strength": signal_strength,
+        "signal_tp": signal_tp,
+        "signal_sl": signal_sl,
+        "symbol": DISPLAY_SYMBOL,
+        "open_positions": len(positions)
     }
 
 @app.post("/api/mt5-tick")
@@ -328,18 +383,58 @@ async def receive_mt5_tick(data: MT5TickModel):
         log_error(f"Tick error: {e}")
         return {"status": "error", "msg": str(e)}
 
+@app.get("/api/mt5-history")
+async def get_mt5_history(days: int = Query(30)):
+    try:
+        history = load_trade_history()
+        cutoff = get_jakarta_time() - timedelta(days=days)
+        filtered = []
+        for t in history:
+            try:
+                if datetime.fromisoformat(t["date"].replace(" ", "T")) >= cutoff:
+                    filtered.append(t)
+            except: continue
+        return {"deals": filtered}
+    except Exception as e:
+        log_error(f"Get history error: {e}")
+        raise HTTPException(500, str(e))
+
 @app.post("/api/mt5-history")
-async def receive_mt5_history(request: Request):
+async def save_mt5_history(request: Request):
     global MT5_HISTORY
     try:
         data = await request.json()
-        MT5_HISTORY = data.get("deals", [])
+        deals = data.get("deals", [])
+        clean_deals = []
+        for d in deals:
+            clean_deals.append({
+                "ticket": d.get("ticket", 0),
+                "order": d.get("order", 0),
+                "position_id": d.get("position_id", 0),
+                "date": d.get("date", ""),
+                "time": d.get("time", 0),
+                "type": d.get("type", ""),
+                "volume": float(d.get("volume", 0.0)),
+                "price": float(d.get("price", 0.0)),
+                "price_open": float(d.get("price_open", 0.0)),
+                "profit": float(d.get("profit", 0.0)),
+                "commission": float(d.get("commission", 0.0)),
+                "swap": float(d.get("swap", 0.0)),
+                "symbol": d.get("symbol", DISPLAY_SYMBOL),
+                "result": d.get("result", ""),
+                "reason": d.get("reason", "Manual")
+            })
+        MT5_HISTORY = clean_deals
         save_trade_history(MT5_HISTORY)
         log_info(f"MT5 History: {len(MT5_HISTORY)} deals received")
         return {"status": "ok", "count": len(MT5_HISTORY)}
     except Exception as e:
-        log_error(f"History error: {e}")
+        log_error(f"Save history error: {e}")
         return {"status": "error", "msg": str(e)}
+
+@app.get("/api/mt5-positions")
+async def get_mt5_positions():
+    return {"positions": load_positions()}
 
 @app.post("/api/mt5-positions")
 async def receive_mt5_positions(request: Request):
@@ -354,17 +449,27 @@ async def receive_mt5_positions(request: Request):
         log_error(f"Positions error: {e}")
         return {"status": "error", "msg": str(e)}
 
+@app.get("/api/mt5-sessions")
+async def get_mt5_sessions():
+    return {"sessions": load_sessions()}
+
 @app.post("/api/mt5-sessions")
 async def receive_mt5_sessions(payload: SessionsPayload):
     global MT5_SESSIONS
     MT5_SESSIONS = payload.sessions
+    save_sessions(MT5_SESSIONS)
     log_info(f"Sessions updated: Asia {MT5_SESSIONS['asia']['range']} | London {MT5_SESSIONS['london']['range']} | NY {MT5_SESSIONS['newyork']['range']} pips")
     return {"status": "ok"}
+
+@app.get("/api/mt5-liquidity")
+async def get_mt5_liquidity():
+    return {"zones": load_liquidity()}
 
 @app.post("/api/mt5-liquidity")
 async def receive_mt5_liquidity(payload: LiquidityPayload):
     global MT5_LIQUIDITY_ZONES
     MT5_LIQUIDITY_ZONES = payload.zones
+    save_liquidity(MT5_LIQUIDITY_ZONES)
     log_info(f"Liquidity updated: {len(MT5_LIQUIDITY_ZONES)} zones")
     return {"status": "ok"}
 
@@ -373,6 +478,7 @@ def dashboard():
     mt5_data = get_mt5_data_cached()
     settings = load_settings()
     history = load_trade_history()
+    positions = load_positions()
     wins = len([t for t in history if t.get("profit", 0) > 0])
     win_rate = round(wins / len(history) * 100, 1) if history else 0
     
@@ -383,7 +489,7 @@ def dashboard():
         "daily_change_pct": mt5_data["daily_change_pct"], 
         "win_rate": win_rate,
         "total_trades": len(history), 
-        "open_positions": len(MT5_POSITIONS), 
+        "open_positions": len(positions), 
         "active_signal": get_active_signal(),
         "data_source": mt5_data["source"], 
         "risk_engine": {
@@ -394,8 +500,8 @@ def dashboard():
         "updated_at": mt5_data["time"], 
         "updated_date": mt5_data["date"], 
         "symbol": DISPLAY_SYMBOL,
-        "sessions": MT5_SESSIONS,
-        "liquidity_zones": MT5_LIQUIDITY_ZONES
+        "sessions": load_sessions(),
+        "liquidity_zones": load_liquidity()
     }
 
 @app.get("/api/signals")
@@ -429,8 +535,7 @@ def get_history(days: int = 30):
         try:
             if datetime.fromisoformat(t["date"].replace(" ", "T")) >= cutoff:
                 filtered.append(t)
-        except:
-            continue
+        except: continue
     return {"trades": filtered}
 
 @app.get("/api/settings")
