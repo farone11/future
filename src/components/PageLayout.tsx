@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import Sidebar from './Sidebar'
+import { useSignalWS } from '../hooks/useSignalWS' // <-- Tambah ini
 
 interface PageLayoutProps {
   title: string
@@ -16,6 +17,16 @@ export default function PageLayout({
   badgeColor = 'text-green-400', 
   children 
 }: PageLayoutProps) {
+  // FIX: Ambil data real dari hook
+  const { liveData } = useSignalWS()
+  const price = liveData?.gold_price ?? 0
+  const spread = liveData?.spread ?? 0
+  const ask = liveData?.ask_price ?? 0
+  
+  // SWAP LONG/SHORT masih dummy. Kalo mau real, tambahin di mt5_push.py + backend
+  const swapLong = -8.5
+  const swapShort = 2.1
+
   return (
     <div className="flex min-h-screen bg-[#0a0a0c] text-white font-sans">
       <Sidebar />
@@ -23,15 +34,15 @@ export default function PageLayout({
       {/* MAIN CONTENT */}
       <div className="flex-1 flex flex-col transition-all duration-300 lg:ml-0 overflow-x-hidden">
         
-        {/* === RUNNING TEXT PALING ATAS === */}
+        {/* === RUNNING TEXT PALING ATAS - UDAH REAL-TIME === */}
         <div className="w-full bg-gradient-to-r from-emerald-800 to-blue-700 sticky top-0 z-20">
           <div className="bg-black/40 overflow-hidden">
             <div className="animate-marquee whitespace-nowrap py-2">
               <span className="text-cyan-300 text-xs lg:text-sm font-semibold mx-6">
-                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: $4475.91 ⚡ SPREAD: 15 ⚡ SWAP LONG: -8.5 ⚡ SWAP SHORT: +2.1 ⚡
+                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: ${price > 0 ? price.toFixed(2) : '---'} ⚡ SPREAD: {spread} ⚡ ASK: ${ask > 0 ? ask.toFixed(2) : '---'} ⚡ SWAP LONG: {swapLong} ⚡ SWAP SHORT: +{swapShort} ⚡
               </span>
               <span className="text-cyan-300 text-xs lg:text-sm font-semibold mx-6">
-                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: $4475.91 ⚡ SPREAD: 15 ⚡ SWAP LONG: -8.5 ⚡ SWAP SHORT: +2.1 ⚡
+                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: ${price > 0 ? price.toFixed(2) : '---'} ⚡ SPREAD: {spread} ⚡ ASK: ${ask > 0 ? ask.toFixed(2) : '---'} ⚡ SWAP LONG: {swapLong} ⚡ SWAP SHORT: +{swapShort} ⚡
               </span>
             </div>
           </div>
@@ -54,10 +65,8 @@ export default function PageLayout({
               {title}
             </h1>
             
-            {/* FIX 1: Ganti <p> jadi <div> */}
             {subtitle && <div className="text-gray-400 text-xs lg:text-sm mt-1">{subtitle}</div>}
             
-            {/* FIX 2: Ganti <p> jadi <div> biar bisa pake flex */}
             {badge && (
               <div className={`text-xs mt-2 flex items-center gap-1 ${badgeColor}`}>
                 <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
