@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
+const BASE_URL = import.meta.env.VITE_API_URL
 
 interface FetchOptions extends RequestInit {
   timeout?: number
@@ -17,7 +17,7 @@ async function apiFetch<T>(
   endpoint: string, 
   options: FetchOptions = {}
 ): Promise<T> {
-  const { timeout = 5000, retries = 2, ...fetchOptions } = options
+  const { timeout = 5000, retries = 2,...fetchOptions } = options
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
 
@@ -26,19 +26,17 @@ async function apiFetch<T>(
       const res = await fetch(`${BASE_URL}${endpoint}`, {
        ...fetchOptions,
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', ...fetchOptions.headers }
+        headers: { 'Content-Type': 'application/json',...fetchOptions.headers }
       })
       
       clearTimeout(timeoutId)
       
       if (!res.ok) {
-        const text = await res.text()
-        throw new ApiError(`HTTP ${res.status}: ${text}`, res.status)
+        throw new ApiError(`HTTP ${res.status}`, res.status)
       }
       
       return await res.json()
     } catch (err: any) {
-      clearTimeout(timeoutId)
       if (err.name === 'AbortError') {
         throw new ApiError('Request timeout', 408)
       }

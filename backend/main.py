@@ -2,13 +2,13 @@ from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from datetime import datetime, timedelta
-from datetime import time as dt_time # <-- FIX 1: rename biar gak ketiban
+from datetime import time as dt_time
 from typing import Dict, Optional, List, Any
 import asyncio
 from contextlib import asynccontextmanager
 import os
 import json
-import time # buat time.time()
+import time
 import pytz
 from pathlib import Path
 
@@ -61,7 +61,7 @@ class SettingsModel(BaseModel):
     @validator('trading_hours')
     def validate_hours(cls, v):
         try:
-            dt_time.fromisoformat(v['start']); dt_time.fromisoformat(v['end']); return v # <-- FIX 2: pake dt_time
+            dt_time.fromisoformat(v['start']); dt_time.fromisoformat(v['end']); return v
         except: raise ValueError('Invalid time format. Use HH:MM')
 
 class NewSignalModel(BaseModel):
@@ -297,7 +297,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(signal_monitor())
     yield; log_info("Shutdown")
 
-app = FastAPI(title="FARONE.AI API", version="14.8 Signal-POST-Fix", lifespan=lifespan)
+app = FastAPI(title="FARONE.AI API", version="14.9 UI-Fix", lifespan=lifespan)
 
 origins = [
     "http://localhost:5173",
@@ -486,31 +486,39 @@ def dashboard():
 
     return {
         "ai_status": "ACTIVE" if mt5_data["source"] == "MT5_LIVE" else "STANDBY",
-        "gold_price": mt5_data["price"], "ask_price": mt5_data["ask"],
-        "spread": mt5_data["spread"], "daily_change": mt5_data["daily_change"],
+        "gold_price": mt5_data["price"],
+        "ask_price": mt5_data["ask"],
+        "spread": mt5_data["spread"],
+        "daily_change": mt5_data["daily_change"],
         "daily_change_pct": mt5_data["daily_change_pct"],
         "win_rate": win_rate,
         "total_trades": len(history),
         "open_positions": len(positions),
         "active_signal": get_active_signal(),
+        "signals": SIGNALS_CACHE["signals"], # <-- TAMBAH INI BIAR Signals.tsx keisi
         "data_source": mt5_data["source"],
         "risk_engine": {
-            "lot_size": settings["max_lot"], "drawdown": 0, "max_daily_dd": settings["max_daily_dd"],
-            "status": "LOW RISK", "balance": mt5_data["balance"], "equity": mt5_data["equity"],
-            "margin": mt5_data["margin"], "free_margin": mt5_data["free_margin"], "kill_switch": False
+            "lot_size": settings["max_lot"],
+            "drawdown": 0,
+            "max_daily_dd": settings["max_daily_dd"],
+            "status": "LOW RISK",
+            "balance": mt5_data["balance"],
+            "equity": mt5_data["equity"],
+            "margin": mt5_data["margin"],
+            "free_margin": mt5_data["free_margin"],
+            "kill_switch": False
         },
         "updated_at": mt5_data["time"],
         "updated_date": mt5_data["date"],
         "symbol": DISPLAY_SYMBOL,
         "sessions": load_sessions(),
-        "liquidity_zones": load_liquidity()
+        "liquidity_zones": load_liquidity() # <-- INI UDAH ADA, BIARIN
     }
 
 @app.get("/api/signals")
 def get_signals():
     return {"signals": SIGNALS_CACHE["signals"]}
 
-# === FIX 405: PASTIKAN INI ADA & DEPLOY ===
 @app.post("/api/signals")
 async def create_signal(signal: NewSignalModel):
     try:
@@ -519,7 +527,7 @@ async def create_signal(signal: NewSignalModel):
         current_price = mt5_data.get("price", signal.entry)
 
         new_signal = {
-            "id": int(time.time() * 1000), # <-- FIX 3: pake time.time()
+            "id": int(time.time() * 1000),
             "pair": "XAUUSD",
             "type": signal.type.upper(),
             "entry": signal.entry,
@@ -573,4 +581,4 @@ def update_settings(data: SettingsModel):
 
 @app.get("/")
 async def root():
-    return {"message": "FARONE.AI API v14.8 - Signal POST Ready"}
+    return {"message": "FARONE.AI API v14.9 - UI-Fix"}

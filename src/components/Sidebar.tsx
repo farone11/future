@@ -5,6 +5,10 @@ import { LayoutDashboard, Signal, History, Settings, ChevronLeft, Menu, X, Activ
 const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 const DASHBOARD_URL = `${API_URL}/api/dashboard`
 
+// Debug: log sekali pas file di-load
+console.log('[Sidebar] API_URL:', API_URL)
+console.log('[Sidebar] DASHBOARD_URL:', DASHBOARD_URL)
+
 interface DashboardData {
   ai_status: string
   gold_price: number
@@ -69,24 +73,32 @@ export default function Sidebar() {
       abortRef.current = new AbortController()
       
       try {
+        console.log('[Sidebar] Fetching:', DASHBOARD_URL)
         const res = await fetch(DASHBOARD_URL, { 
           signal: abortRef.current.signal,
-          cache: 'no-store' 
+          cache: 'no-store',
+          mode: 'cors' // explicit CORS
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(`HTTP ${res.status}: ${text}`)
+        }
+        
         const liveData = await res.json()
+        console.log('[Sidebar] Data received:', liveData)
         setData(liveData)
         setApiStatus('live')
       } catch (e: any) {
         if (e.name === 'AbortError') return
-        console.error('❌ Sidebar API Error:', e)
+        console.error('❌ Sidebar API Error:', e.message, e)
         setApiStatus('error')
       }
     }
 
     setApiStatus('connecting')
     fetchData()
-    intervalRef.current = setInterval(fetchData, 2000) // ganti 2 detik, 1 detik kebanyakan
+    intervalRef.current = setInterval(fetchData, 2000)
 
     return () => {
       abortRef.current?.abort()
@@ -97,7 +109,7 @@ export default function Sidebar() {
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: Signal, label: 'Signals', path: '/signals' },
-    { icon: Droplets, label: 'Liquidity Zones', path: '/liquidity-zones' }, // <-- TAMBAH INI
+    { icon: Droplets, label: 'Liquidity Zones', path: '/liquidity-zones' },
     { icon: History, label: 'History', path: '/history' },
     { icon: Settings, label: 'Settings', path: '/settings' },
   ]

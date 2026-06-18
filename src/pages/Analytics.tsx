@@ -3,7 +3,7 @@ import PageLayout from '../components/PageLayout'
 import Card from '../components/Card'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:5400'
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
 
 export default function Analytics() {
   const [data, setData] = useState<any>(null)

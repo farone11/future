@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import Sidebar from './Sidebar'
+
 interface PageLayoutProps {
   title: string
   subtitle?: string
@@ -7,6 +8,7 @@ interface PageLayoutProps {
   badgeColor?: string
   children: ReactNode
 }
+
 export default function PageLayout({ 
   title, 
   subtitle, 
@@ -15,8 +17,7 @@ export default function PageLayout({
   children 
 }: PageLayoutProps) {
   return (
-    <div className="flex min-h-screen bg-[
-#0a0a0c] text-white font-sans">
+    <div className="flex min-h-screen bg-[#0a0a0c] text-white font-sans">
       <Sidebar />
       {/* MAIN CONTENT */}
       <div className="flex-1 flex flex-col transition-all duration-300 lg:ml-0 overflow-x-hidden">
@@ -34,6 +35,7 @@ export default function PageLayout({
             </div>
           </div>
         </div>
+
         {/* === BANNER === */}
         <div className="w-full bg-black">
           <img 
@@ -43,6 +45,7 @@ export default function PageLayout({
             onError={(e) => e.currentTarget.style.display = 'none'}
           />
         </div>
+
         <div className="flex-1 p-4 lg:p-6">
           {/* Page header - judul per halaman */}
           <div className="mb-6">
@@ -50,12 +53,11 @@ export default function PageLayout({
               {title}
             </h1>
 
-            {/* FIX 1: Ganti <p> jadi <div> */}
             {subtitle && <div className="text-gray-400 text-xs lg:text-sm mt-1">{subtitle}</div>}
 
-            {/* FIX 2: Ganti <p> jadi <div> biar bisa pake flex */}
+            {/* FIX: Pake backtick ` bukan " atau ' */}
             {badge && (
-              <div className={text-xs mt-2 flex items-center gap-1 ${badgeColor}}>
+              <div className={`text-xs mt-2 flex items-center gap-1 ${badgeColor}`}>
                 <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
                 <span>{badge}</span>
               </div>
@@ -64,9 +66,9 @@ export default function PageLayout({
 
           {children}
         </div>
+
         {/* Footer */}
-        <footer className="border-t border-[
-#1e1e24] px-4 lg:px-6 py-3 flex flex-col lg:flex-row items-start lg:items-center justify-between text-xs text-gray-600 gap-3">
+        <footer className="border-t border-[#1e1e24] px-4 lg:px-6 py-3 flex flex-col lg:flex-row items-start lg:items-center justify-between text-xs text-gray-600 gap-3">
           <div>
             <span className="text-red-400 font-semibold">Risk Warning:</span> Trading foreign exchange on margin carries a high level of risk.
             <br />© 2026 FARONE.AI — Powered by MetaTrader 5 | Contact: admin@faronecapital.online
