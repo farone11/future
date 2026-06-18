@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 
-// Tidak hardcode, tidak pakai import.meta.env.
-// - Dev (localhost): pakai proxy Vite → '/api' → https://api.faronecapital.online
-// - Production (pages.dev / domain lain): langsung ke https://api.faronecapital.online
+// Tidak hardcode URL.
+// - Dev (localhost): Vite proxy /api → https://api.faronecapital.online
+// - Production (pages.dev / domain): langsung ke VITE_API_URL dari .env
 function getApiBase(): string {
   if (typeof window === 'undefined') return ''
   const { hostname } = window.location
   if (hostname === 'localhost' || hostname === '127.0.0.1') return '' // Vite proxy handles /api
-  return 'https://api.faronecapital.online'
+  return import.meta.env.VITE_API_URL ?? 'https://api.faronecapital.online'
 }
 
 export interface Signal {
@@ -148,7 +148,7 @@ export const useSignalWS = () => {
           }
           const fallback: Signal = {
             id:         active.id          ?? Date.now(),
-            type:       active.type        ?? 'NONE',
+            type:       active.type        ?? 'NONE',  // pakai 'type', bukan 'status'
             entry:      active.entry       ?? 0,
             sl:         active.sl          ?? 0,
             tp:         active.tp1         ?? active.tp ?? 0,
