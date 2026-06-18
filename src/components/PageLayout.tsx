@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import Sidebar from './Sidebar'
 
 interface PageLayoutProps {
@@ -9,6 +9,8 @@ interface PageLayoutProps {
   children: ReactNode
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://api.faronecapital.online'
+
 export default function PageLayout({ 
   title, 
   subtitle, 
@@ -16,21 +18,45 @@ export default function PageLayout({
   badgeColor = 'text-green-400', 
   children 
 }: PageLayoutProps) {
+  const [liveData, setLiveData] = useState<{ gold_price: number; spread: number } | null>(null)
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/dashboard`)
+        const data = await res.json()
+        setLiveData({
+          gold_price: data.gold_price || 0,
+          spread: data.spread || 0
+        })
+      } catch (err) {
+        console.error('[PageLayout] Failed to fetch live data:', err)
+      }
+    }
+
+    fetchData()
+    const interval = setInterval(fetchData, 5000) // 5 detik biar gak spam
+    return () => clearInterval(interval)
+  }, [])
+
+  const goldPrice = liveData?.gold_price?.toFixed(2) || '0.00'
+  const spread = liveData?.spread?.toFixed(0) || '0'
+
   return (
     <div className="flex min-h-screen bg-[#0a0a0c] text-white font-sans">
       <Sidebar />
       {/* MAIN CONTENT */}
       <div className="flex-1 flex flex-col transition-all duration-300 lg:ml-0 overflow-x-hidden">
 
-        {/* === RUNNING TEXT PALING ATAS === */}
+        {/* === RUNNING TEXT PALING ATAS - UDAH LIVE === */}
         <div className="w-full bg-gradient-to-r from-emerald-800 to-blue-700 sticky top-0 z-20">
           <div className="bg-black/40 overflow-hidden">
             <div className="animate-marquee whitespace-nowrap py-2">
               <span className="text-cyan-300 text-xs lg:text-sm font-semibold mx-6">
-                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: $4475.91 ⚡ SPREAD: 15 ⚡ SWAP LONG: -8.5 ⚡ SWAP SHORT: +2.1 ⚡
+                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: ${goldPrice} ⚡ SPREAD: {spread} ⚡ SWAP LONG: -8.5 ⚡ SWAP SHORT: +2.1 ⚡
               </span>
               <span className="text-cyan-300 text-xs lg:text-sm font-semibold mx-6">
-                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: $4475.91 ⚡ SPREAD: 15 ⚡ SWAP LONG: -8.5 ⚡ SWAP SHORT: +2.1 ⚡
+                ⚡ FUTURISTIC GOLD TRADING ANALYTICS ⚡ XAUUSD LIVE: ${goldPrice} ⚡ SPREAD: {spread} ⚡ SWAP LONG: -8.5 ⚡ SWAP SHORT: +2.1 ⚡
               </span>
             </div>
           </div>
@@ -55,7 +81,6 @@ export default function PageLayout({
 
             {subtitle && <div className="text-gray-400 text-xs lg:text-sm mt-1">{subtitle}</div>}
 
-            {/* FIX: Pake backtick ` bukan " atau ' */}
             {badge && (
               <div className={`text-xs mt-2 flex items-center gap-1 ${badgeColor}`}>
                 <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>

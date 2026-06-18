@@ -11,6 +11,8 @@ body {
   background-color: #0a0a0c;
   color: #e5e5e5;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::-webkit-scrollbar {
@@ -29,4 +31,28 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #3a3a42;
+}
+
+/* === MARQUEE RUNNING TEXT === */
+@keyframes marquee {
+  0% { transform: translateX(0%) }
+  100% { transform: translateX(-50%) }
+}
+
+.animate-marquee {
+  display: inline-block;
+  animation: marquee 30s linear infinite;
+  padding-left: 100%;
+  white-space: nowrap;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* === UTILITY === */
+.glass {
+  background: rgba(15, 15, 18, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
