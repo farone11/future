@@ -1,14 +1,15 @@
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
+from datetime import time as dt_time # <-- FIX 1: rename biar gak ketiban
 from typing import Dict, Optional, List, Any
 import asyncio
 from contextlib import asynccontextmanager
 import os
 import json
-import time # <-- TAMBAH INI
-import pytz # <-- TAMBAH INI
+import time # buat time.time()
+import pytz
 from pathlib import Path
 
 def log_info(msg): print(f"[INFO] {datetime.utcnow()} {msg}")
@@ -60,7 +61,7 @@ class SettingsModel(BaseModel):
     @validator('trading_hours')
     def validate_hours(cls, v):
         try:
-            time.fromisoformat(v['start']); time.fromisoformat(v['end']); return v
+            dt_time.fromisoformat(v['start']); dt_time.fromisoformat(v['end']); return v # <-- FIX 2: pake dt_time
         except: raise ValueError('Invalid time format. Use HH:MM')
 
 class NewSignalModel(BaseModel):
@@ -518,7 +519,7 @@ async def create_signal(signal: NewSignalModel):
         current_price = mt5_data.get("price", signal.entry)
 
         new_signal = {
-            "id": int(time.time() * 1000), # <-- Pake time.time()
+            "id": int(time.time() * 1000), # <-- FIX 3: pake time.time()
             "pair": "XAUUSD",
             "type": signal.type.upper(),
             "entry": signal.entry,
