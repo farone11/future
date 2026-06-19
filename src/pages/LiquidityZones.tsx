@@ -1,97 +1,38 @@
-import { useEffect, useState } from 'react';
-import PageLayout from '../components/PageLayout';
-import Card from '../components/Card';
+import { useLiquidityWS } from '../hooks/useLiquidityWS'
+import PageLayout from '../components/PageLayout'
+import Card from '../components/Card'
 
-interface SessionData {
-  high: number;
-  low: number;
-  mid: number;
-  range: number;
-}
-
-interface LiquidityZone {
-  type: string;
-  price: number;
-  status: string;
-  age: string;
-  timestamp?: number;
-  ob: boolean;
-  session?: string;
-}
-
-interface DashboardData {
-  sessions: {
-    asia: SessionData;
-    london: SessionData;
-    newyork: SessionData;
-  };
-  liquidity_zones: LiquidityZone[];
-}
-
-// Fungsi format age: 1d 5h, 23h 15m, 45m
 function formatAge(timestamp?: number): string {
-  if (!timestamp) return "0m";
-  
-  const now = Math.floor(Date.now() / 1000);
-  const diffSec = now - timestamp;
-  if (diffSec < 60) return "<1m";
-  
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-  
+  if (!timestamp) return "0m"
+  const now = Math.floor(Date.now() / 1000)
+  const diffSec = now - timestamp
+  if (diffSec < 60) return "<1m"
+  const diffMin = Math.floor(diffSec / 60)
+  const diffHour = Math.floor(diffMin / 60)
+  const diffDay = Math.floor(diffHour / 24)
   if (diffDay > 0) {
-    const hours = diffHour % 24;
-    return hours > 0 ? `${diffDay}d ${hours}h` : `${diffDay}d`;
+    const hours = diffHour % 24
+    return hours > 0? `${diffDay}d ${hours}h` : `${diffDay}d`
   }
   if (diffHour > 0) {
-    const mins = diffMin % 60;
-    return mins > 0 ? `${diffHour}h ${mins}m` : `${diffHour}h`;
+    const mins = diffMin % 60
+    return mins > 0? `${diffHour}h ${mins}m` : `${diffHour}h`
   }
-  return `${diffMin}m`;
+  return `${diffMin}m`
 }
 
 export default function LiquidityZones() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const API_URL = import.meta.env.VITE_API_URL || '';
-        const res = await fetch(`${API_URL}/api/dashboard`);
-
-        if (res.ok) {
-          const json = await res.json();
-          console.log('API Response:', json);
-          setData(json);
-          setError(null);
-        } else {
-          setError(`API Error: ${res.status}`);
-        }
-      } catch (err) {
-        setError('Failed to connect to API');
-        console.error('Failed fetch liquidity:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data, loading, error } = useLiquidityWS()
 
   const zones = (data?.liquidity_zones || [])
-    .filter(z => z.status === 'ACTIVE') // FIX: Filter cuma yang ACTIVE
-    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)); // FIX: Sort terbaru di atas
-    
-  const sessions = data?.sessions;
+  .filter(z => z.status === 'ACTIVE')
+  .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
 
-  const bslCount = zones.filter(z => z.type === 'BSL').length;
-  const sslCount = zones.filter(z => z.type === 'SSL').length;
-  const sessionCount = sessions ? Object.values(sessions).filter(s => s.range > 0).length : 0;
+  const sessions = data?.sessions
+
+  const bslCount = zones.filter(z => z.type === 'BSL').length
+  const sslCount = zones.filter(z => z.type === 'SSL').length
+  const sessionCount = sessions? Object.values(sessions).filter(s => s.range > 0).length : 0
 
   return (
     <PageLayout
@@ -100,11 +41,10 @@ export default function LiquidityZones() {
     >
       {error && (
         <div className="mb-4 bg-red-900/20 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
-          {error} - Check API connection
+          {error}
         </div>
       )}
 
-      {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
         <Card>
           <div className="text-gray-400 text-xs uppercase tracking-widest mb-1">BUY-SIDE LIQUIDITY</div>
@@ -123,7 +63,6 @@ export default function LiquidityZones() {
         </Card>
       </div>
 
-      {/* Table */}
       <Card>
         <div className="text-yellow-400 font-semibold text-sm mb-4">Active Liquidity Zones</div>
         <div className="overflow-x-auto">
@@ -138,15 +77,15 @@ export default function LiquidityZones() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
+              {loading? (
                 <tr><td colSpan={5} className="text-center py-4 text-gray-500">Loading...</td></tr>
-              ) : zones.length === 0 ? (
+              ) : zones.length === 0? (
                 <tr><td colSpan={5} className="text-center py-4 text-gray-500">No liquidity zones</td></tr>
               ) : zones.map((zone, i) => (
                 <tr key={`${zone.type}-${zone.price}-${i}`} className="border-b border-[#1e1e24] last:border-0 hover:bg-white/2 transition-colors">
                   <td className="py-2 pr-6">
                     <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${
-                        zone.type === 'SSL' ? 'bg-green-600' : 'bg-red-600'
+                        zone.type === 'SSL'? 'bg-green-600' : 'bg-red-600'
                       }`}>
                       {zone.type}
                     </span>
@@ -156,13 +95,13 @@ export default function LiquidityZones() {
                     {zone.session && <span className="text-gray-500 text-xs ml-2 capitalize">({zone.session})</span>}
                   </td>
                   <td className="py-2 pr-6">
-                    <span className={zone.status === 'ACTIVE' ? 'text-green-400' : 'text-gray-500'}>
+                    <span className={zone.status === 'ACTIVE'? 'text-green-400' : 'text-gray-500'}>
                       {zone.status}
                     </span>
                   </td>
                   <td className="py-2 pr-6 text-gray-400">{formatAge(zone.timestamp)}</td>
                   <td className="py-2">
-                    {zone.ob ? (
+                    {zone.ob? (
                       <span className="text-green-400 font-semibold">YES</span>
                     ) : (
                       <span className="text-gray-600">NO</span>
@@ -175,18 +114,14 @@ export default function LiquidityZones() {
         </div>
       </Card>
 
-      {/* Session levels */}
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
         {[
           { name: 'Asia Session', key: 'asia' as const, time: '05:00 - 13:00 WIB' },
           { name: 'London Session', key: 'london' as const, time: '13:00 - 22:00 WIB' },
           { name: 'New York Session', key: 'newyork' as const, time: '19:00 - 04:00 WIB' }
         ].map((session) => {
-          const s = sessions?.[session.key];
-          const hasData = s && s.range > 0;
-          const sellZone = hasData ? s.high : 0;
-          const buyZone = hasData ? s.low : 0;
-          
+          const s = sessions?.[session.key]
+          const hasData = s && s.range > 0
           return (
             <Card key={session.name}>
               <div className="flex items-center justify-between mb-3">
@@ -196,38 +131,37 @@ export default function LiquidityZones() {
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between">
                   <span className="text-gray-500">High</span>
-                  <span className="text-gray-300 font-mono">{hasData ? s.high.toFixed(2) : '----.--'}</span>
+                  <span className="text-gray-300 font-mono">{hasData? s.high.toFixed(2) : '----.--'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Low</span>
-                  <span className="text-gray-300 font-mono">{hasData ? s.low.toFixed(2) : '----.--'}</span>
+                  <span className="text-gray-300 font-mono">{hasData? s.low.toFixed(2) : '----.--'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Mid</span>
-                  <span className="text-gray-300 font-mono">{hasData ? s.mid.toFixed(2) : '----.--'}</span>
+                  <span className="text-gray-300 font-mono">{hasData? s.mid.toFixed(2) : '----.--'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Range</span>
-                  <span className="text-yellow-400 font-mono">{hasData ? `${s.range} pips` : '--- pips'}</span>
+                  <span className="text-yellow-400 font-mono">{hasData? `${s.range} pips` : '--- pips'}</span>
                 </div>
-                
                 {hasData && (
                   <div className="pt-2 mt-2 border-t border-[#1e1e24] space-y-1">
                     <div className="flex justify-between">
                       <span className="text-red-400">SELL Zone</span>
-                      <span className="text-red-400 font-mono">{sellZone.toFixed(2)}</span>
+                      <span className="text-red-400 font-mono">{s.high.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-green-400">BUY Zone</span>
-                      <span className="text-green-400 font-mono">{buyZone.toFixed(2)}</span>
+                      <span className="text-green-400 font-mono">{s.low.toFixed(2)}</span>
                     </div>
                   </div>
                 )}
               </div>
             </Card>
-          );
+          )
         })}
       </div>
     </PageLayout>
-  );
+  )
 }
